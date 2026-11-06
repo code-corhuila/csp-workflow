@@ -7,6 +7,7 @@ import co.edu.corhuila.csp.workflow.application.port.in.StartResult;
 import co.edu.corhuila.csp.workflow.application.port.out.BookingParticipant;
 import co.edu.corhuila.csp.workflow.application.port.out.IdGenerator;
 import co.edu.corhuila.csp.workflow.application.port.out.ParticipantFailedException;
+import co.edu.corhuila.csp.workflow.application.port.out.SagaAlreadyStartedException;
 import co.edu.corhuila.csp.workflow.application.port.out.SagaStore;
 import co.edu.corhuila.csp.workflow.domain.saga.IdempotencyKeyConflictException;
 import co.edu.corhuila.csp.workflow.domain.saga.SagaInstance;
@@ -47,7 +48,11 @@ public final class RunBookSeatsSaga implements StartBookSeatsSaga, GetSaga {
         }
         SagaInstance saga = SagaInstance.start(ids.next(), SAGA_NAME, command.userId(), command.idempotencyKey(),
                 command.input(), clock.instant());
-        store.save(saga);
+        try {
+            store.save(saga);
+        } catch (SagaAlreadyStartedException race) {
+            return replay(store.findByUserAndKey(command.userId(), command.idempotencyKey()).orElseThrow(), command);
+        }
         run(saga, command);
         return new StartResult(saga, true);
     }

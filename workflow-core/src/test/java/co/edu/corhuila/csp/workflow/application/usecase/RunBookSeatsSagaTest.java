@@ -12,8 +12,10 @@ import co.edu.corhuila.csp.workflow.application.port.in.StartResult;
 import co.edu.corhuila.csp.workflow.application.port.out.BookingParticipant;
 import co.edu.corhuila.csp.workflow.application.port.out.IdGenerator;
 import co.edu.corhuila.csp.workflow.application.port.out.ParticipantFailedException;
+import co.edu.corhuila.csp.workflow.application.port.out.SagaAlreadyStartedException;
 import co.edu.corhuila.csp.workflow.application.port.out.SagaStore;
 import co.edu.corhuila.csp.workflow.domain.saga.IdempotencyKeyConflictException;
+import co.edu.corhuila.csp.workflow.domain.saga.SagaInput;
 import co.edu.corhuila.csp.workflow.domain.saga.SagaInstance;
 import co.edu.corhuila.csp.workflow.domain.saga.SagaStatus;
 import co.edu.corhuila.csp.workflow.domain.saga.UnknownSagaException;
@@ -138,6 +140,27 @@ class RunBookSeatsSagaTest {
     }
 
     @Test
+    void twoRequestsWithTheSameKeyAtTheSameTimeAnswerAsOneSagaAndTheLoserRunsNothing() {
+        store.racer = SagaInstance.start(UUID.fromString("44444444-4444-4444-8444-444444444444"), "book-seats", USER_ID,
+                "key-0000000000001", new SagaInput(SHOWTIME_ID, List.of("A1")), Instant.parse("2026-11-05T09:59:59Z"));
+
+        StartResult result = saga.start(command("key-0000000000001", "A1"));
+
+        assertFalse(result.created());
+        assertEquals(UUID.fromString("44444444-4444-4444-8444-444444444444"), result.saga().id());
+        assertEquals(List.of(), booking.calls);
+    }
+
+    @Test
+    void theLoserOfTheRaceWithAnotherPayloadIsAConflict() {
+        store.racer = SagaInstance.start(UUID.fromString("44444444-4444-4444-8444-444444444444"), "book-seats", USER_ID,
+                "key-0000000000001", new SagaInput(SHOWTIME_ID, List.of("A1")), Instant.parse("2026-11-05T09:59:59Z"));
+
+        assertThrows(IdempotencyKeyConflictException.class, () -> saga.start(command("key-0000000000001", "B7")));
+        assertEquals(List.of(), booking.calls);
+    }
+
+    @Test
     void theSameKeyWithAnotherPayloadIsAConflict() {
         saga.start(command("key-0000000000001", "A1"));
 
@@ -190,10 +213,17 @@ class RunBookSeatsSagaTest {
 
     private static final class FakeStore implements SagaStore {
         final List<String> saves = new ArrayList<>();
+        /** A saga that another request inserts between the lookup and the insert of this one. */
+        SagaInstance racer;
         private final Map<UUID, SagaInstance> byId = new HashMap<>();
 
         @Override
         public void save(SagaInstance saga) {
+            if (racer != null && !byId.containsKey(saga.id())) {
+                byId.put(racer.id(), racer);
+                racer = null;
+                throw new SagaAlreadyStartedException();
+            }
             byId.put(saga.id(), saga);
             saves.add(saga.status() + "|" + join(saga.completedSteps()) + "|"
                     + (saga.currentStep() == null ? "-" : saga.currentStep()));
@@ -206,6 +236,9 @@ class RunBookSeatsSagaTest {
 
         @Override
         public Optional<SagaInstance> findByUserAndKey(UUID userId, String key) {
+            if (racer != null) {
+                return Optional.empty();
+            }
             return byId.values().stream()
                     .filter(s -> s.userId().equals(userId) && s.idempotencyKey().equals(key)).findFirst();
         }
