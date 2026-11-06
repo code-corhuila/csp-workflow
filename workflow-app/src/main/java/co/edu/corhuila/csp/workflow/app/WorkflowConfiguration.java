@@ -73,6 +73,11 @@ class WorkflowConfiguration {
         return new RunBookSeatsSaga(booking, store, ids, clock);
     }
 
+    @Bean
+    SagaRecoveryRunner sagaRecoveryRunner(RunBookSeatsSaga bookSeatsSaga, Clock clock) {
+        return new SagaRecoveryRunner(bookSeatsSaga, clock);
+    }
+
     /** JWT_PUBLIC_KEY (one line with literal \n escapes is accepted) or JWT_PUBLIC_KEY_FILE. */
     @Bean
     Rs256Verifier tokenVerifier(@Value("${JWT_PUBLIC_KEY:}") String pem, @Value("${JWT_PUBLIC_KEY_FILE:}") String file)

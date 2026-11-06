@@ -55,7 +55,7 @@ jobs:
           docker run --rm --network host -v "$PWD/db:/workspace:ro" -e FLYWAY_URL=jdbc:postgresql://localhost:5432/csp \
             -e FLYWAY_USER=postgres -e FLYWAY_PASSWORD=postgres flyway/flyway:11.20 \
             -workingDirectory=/workspace -configFiles=flyway.toml migrate | tee flyway.log
-          grep -q 'Successfully applied 3 migrations' flyway.log
+          grep -q 'Successfully applied 4 migrations' flyway.log
       # The image is what csp-infra composes: build it, check that it refuses to start without its key and token,
       # then start it with a throwaway key pair and ask for its liveness.
       - name: The image builds and answers its health check
