@@ -14,7 +14,7 @@ the place of the state
 ([ADR-065](https://github.com/code-corhuila/csp-docs/blob/main/05-architecture/decisions/records/ADR-065-workflow-saga-state-in-postgresql.md))
 and the first saga with its contract
 ([ADR-066](https://github.com/code-corhuila/csp-docs/blob/main/05-architecture/decisions/records/ADR-066-workflow-first-saga-book-seats.md),
-`07-api/contracts/openapi/workflow-service.yaml`). Today the repository holds the base structure and a liveness endpoint; the saga is not implemented yet.
+`07-api/contracts/openapi/workflow-service.yaml`). Today the saga `book-seats` runs end to end with an in-memory store.
 
 ## Structure
 
@@ -35,7 +35,11 @@ java -jar workflow-app/target/workflow-app-0.1.0.jar
 curl http://localhost:8086/api/v1/health
 ```
 
-The variables are listed in `.env.example`.
+The variables are listed in `.env.example`. `JWT_PUBLIC_KEY` (or `JWT_PUBLIC_KEY_FILE`) and `SERVICE_TOKEN` (or `SERVICE_TOKEN_FILE`) are required: the service refuses to start without them. For local work `csp-infra-postgres/scripts/dev-keys.sh` writes both.
+
+## API
+
+`POST /api/v1/sagas/book-seats` and `GET /api/v1/sagas/{id}` follow `07-api/contracts/openapi/workflow-service.yaml` in `csp-docs`. The saga state is kept in memory until the PostgreSQL store of ADR-065 lands, so a restart loses it.
 
 ## Branching
 
