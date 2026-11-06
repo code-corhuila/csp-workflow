@@ -104,6 +104,8 @@ if [ "$DEFECT" = 0 ]; then
     expect_match "Booking: the snapshot of the title and the room comes from Catalog, not from the request" \
         "$(psql_admin "select movie_title_snapshot||'/'||room_name_snapshot from booking.seat_hold where id='$RES1'")" '^E2E Synthetic Movie [0-9a-f]+/E2E Room [0-9a-f]+$'
     expect "Booking: the total is the price of the showtime times two seats" "$(psql_admin "select total_amount from booking.reservation where id='$RES1'")" 3000000
+    expect_match "Booking: the confirmed event carries the start time of the showtime from Catalog" \
+        "$(psql_admin "select payload->'payload'->>'showtimeStartsAt' from booking.outbox_event where aggregate_id='$RES1' and event_type='BookingConfirmed'")" '^[0-9]{4}-06-01T18:00:00'
 fi
 expect "Booking: both seats are CONFIRMED" "$(psql_admin "select count(*) from booking.seat_hold_item where hold_id='$RES1' and status='CONFIRMED'")" 2
 req GET "/api/v1/sagas/$SAGA1" "$T1" "" ""
@@ -315,6 +317,10 @@ expect "the hold was not repeated: one hold call and one reservation" "$(printf 
 expect "every call of the saga used the key <sagaId>:<step>" \
     "$(printf '%s\n' "$CALLS5" | grep -vc "idem=$SAGA5:\(hold-seats\|confirm-reservation\) ")" 0
 expect "no release was sent" "$(printf '%s\n' "$CALLS5" | grep -c '/release')" 0
+expect "the steps resumed after the restart carry the X-Correlation-Id of the original request" \
+    "$(printf '%s\n' "$CALLS5" | grep -vc "corr=$C5 ")" 0
+expect "Booking: the confirmed event carries the correlation id of the original request" \
+    "$(psql_admin "select payload->'metadata'->>'correlationId' from booking.outbox_event where aggregate_id='$RES5' and event_type='BookingConfirmed'")" "$C5"
 expect "Booking wrote one BookingConfirmed for it" "$(psql_admin "select count(*) from booking.outbox_event where aggregate_id='$RES5' and event_type='BookingConfirmed'")" 1
 expect "the restart left the FAILED saga of section 2c alone" "$(psql_admin "select status from workflow.saga where id='$SAGA6'")" FAILED
 docker logs "$WORKFLOW" 2>&1 | grep -q 'saga recovery resumed=1' && pass "the workflow logged saga recovery resumed=1" || fail "the workflow logged saga recovery resumed=1" "line not found"
