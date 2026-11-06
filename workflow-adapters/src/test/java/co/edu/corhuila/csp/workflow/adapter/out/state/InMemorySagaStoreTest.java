@@ -3,17 +3,20 @@ package co.edu.corhuila.csp.workflow.adapter.out.state;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import co.edu.corhuila.csp.workflow.domain.saga.SagaInput;
 import co.edu.corhuila.csp.workflow.domain.saga.SagaInstance;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 class InMemorySagaStoreTest {
 
     private static final UUID USER = UUID.fromString("11111111-1111-4111-8111-111111111111");
+    private static final SagaInput INPUT = new SagaInput(UUID.fromString("22222222-2222-4222-8222-222222222222"), List.of("A1", "A2"));
 
     private static SagaInstance saga(UUID user, String key) {
-        return SagaInstance.start(UUID.randomUUID(), "book-seats", user, key, "fp", Instant.parse("2026-11-05T10:00:00Z"));
+        return SagaInstance.start(UUID.randomUUID(), "book-seats", user, key, INPUT, Instant.parse("2026-11-05T10:00:00Z"));
     }
 
     @Test
