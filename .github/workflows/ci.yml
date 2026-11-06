@@ -55,7 +55,17 @@ jobs:
           docker run --rm --network host -v "$PWD/db:/workspace:ro" -e FLYWAY_URL=jdbc:postgresql://localhost:5432/csp \
             -e FLYWAY_USER=postgres -e FLYWAY_PASSWORD=postgres flyway/flyway:11.20 \
             -workingDirectory=/workspace -configFiles=flyway.toml migrate | tee flyway.log
-          grep -q 'Successfully applied 4 migrations' flyway.log
+          grep -q 'Successfully applied 5 migrations' flyway.log
+      # The compose file is what csp-infra includes: it must render with the variables of the platform environment, where
+      # SERVICE_TOKEN and SPRING_DATASOURCE_USERNAME belong to other services, and refuse to without the token of the workflow.
+      - name: The compose file renders with the variables of the platform
+        run: |
+          export PG_DATABASE=csp WORKFLOW_APP_PASSWORD=x JWT_PUBLIC_KEY=k WORKFLOW_SERVICE_TOKEN=t             WORKFLOW_DB_USER=workflow_migrator WORKFLOW_DB_PASSWORD=w
+          docker compose -f deploy/compose.yml --profile tooling config -q
+          if env -u WORKFLOW_SERVICE_TOKEN docker compose -f deploy/compose.yml config -q 2> compose.log; then
+            echo "the compose file rendered without the token of the workflow"; exit 1
+          fi
+          grep -q 'WORKFLOW_SERVICE_TOKEN' compose.log
       # The image is what csp-infra composes: build it, check that it refuses to start without its key and token,
       # then start it with a throwaway key pair and ask for its liveness.
       - name: The image builds and answers its health check
