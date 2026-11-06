@@ -1,0 +1,16 @@
+# Flyway configuration of the workflow schema (ADR-065). The connection comes from the environment
+# (FLYWAY_URL, FLYWAY_USER, FLYWAY_PASSWORD): no credential lives in this file.
+[flyway]
+# The ORDER is the version number in the file name (V001, V002, ...). rollbacks/ is NOT listed: Flyway never runs
+# the U scripts by itself; an operator runs them from the highest version down.
+locations = ["filesystem:migrations"]
+# A file named outside V<version>__<description>.sql fails instead of being ignored.
+validateMigrationNaming = true
+# clean drops everything. It is never needed: reversion is done with the U scripts.
+cleanDisabled = true
+
+# Own schema and own control table: the history lives in workflow.flyway_schema_history and never collides with
+# another domain. The connection itself is read from FLYWAY_URL, FLYWAY_USER and FLYWAY_PASSWORD.
+[environments.default]
+schemas = ["workflow"]
+defaultSchema = "workflow"

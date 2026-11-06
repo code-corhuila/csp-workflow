@@ -9,6 +9,10 @@ services:
     environment:
       PORT: ${PORT:-8086}
       BOOKING_API_URL: ${BOOKING_API_URL:-http://booking-api:8083/api/v1/booking}
+      # The state of the sagas (ADR-065): its own login, a member of workflow_writer, never the administrator.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${PG_DATABASE:?set PG_DATABASE}
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME:?set SPRING_DATASOURCE_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD:?set SPRING_DATASOURCE_PASSWORD}
       # Public key of the identity service, one line with \n escapes.
       JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:?run csp-infra-postgres/scripts/dev-keys.sh}
       # Issued by the identity service for csp-workflow; never versioned.
@@ -18,6 +22,22 @@ services:
       HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-5}
       HTTP_BACKOFF_MS: ${HTTP_BACKOFF_MS:-200}
     expose: ["8086"]
+    networks: [platform]
+
+  # Creates schema workflow, where the service keeps the state of the sagas (ADR-065). No -db repository owns that
+  # schema, so its migrations live in db/. It runs as the migration executor of the domain, never as the service,
+  # and before the service starts: docker compose --profile tooling run --rm workflow-db-migrate
+  workflow-db-migrate:
+    image: flyway/flyway:11.20
+    profiles: [tooling]
+    volumes:
+      - ../db:/workspace:ro
+    environment:
+      FLYWAY_URL: jdbc:postgresql://postgres:5432/${PG_DATABASE:?set PG_DATABASE}
+      FLYWAY_USER: ${WORKFLOW_DB_USER:?set WORKFLOW_DB_USER}
+      FLYWAY_PASSWORD: ${WORKFLOW_DB_PASSWORD:?set WORKFLOW_DB_PASSWORD}
+    entrypoint: ["flyway", "-workingDirectory=/workspace", "-configFiles=flyway.toml"]
+    command: ["migrate"]
     networks: [platform]
 
 networks:
