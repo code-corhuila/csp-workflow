@@ -8,6 +8,15 @@ services:
       dockerfile: deploy/Dockerfile
     environment:
       PORT: ${PORT:-8086}
+      BOOKING_API_URL: ${BOOKING_API_URL:-http://booking-api:8083/api/v1/booking}
+      # Public key of the identity service, one line with \n escapes.
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:?run csp-infra-postgres/scripts/dev-keys.sh}
+      # Issued by the identity service for csp-workflow; never versioned.
+      # csp-infra-postgres/scripts/dev-keys.sh writes a development one into .env.
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?run csp-infra-postgres/scripts/dev-keys.sh}
+      HTTP_ATTEMPTS: ${HTTP_ATTEMPTS:-3}
+      HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-5}
+      HTTP_BACKOFF_MS: ${HTTP_BACKOFF_MS:-200}
     expose: ["8086"]
     networks: [platform]
 

@@ -11,6 +11,7 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /** The only place where errors become status codes. Every error answers with the envelope. */
@@ -38,6 +39,12 @@ public class ErrorHandler {
     ResponseEntity<ApiError> conflict(IdempotencyKeyConflictException e) {
         return respond(HttpStatus.CONFLICT,
                 ApiError.of(ApiError.CONFLICT, "the Idempotency-Key was already used with a different payload"));
+    }
+
+    /** A path variable that is not an id names nothing that exists. */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    ResponseEntity<ApiError> badPathVariable(MethodArgumentTypeMismatchException e) {
+        return respond(HttpStatus.NOT_FOUND, ApiError.of(ApiError.NOT_FOUND, "the saga does not exist"));
     }
 
     @ExceptionHandler(NoResourceFoundException.class)
