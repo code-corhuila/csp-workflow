@@ -41,6 +41,26 @@ The variables are listed in `.env.example`. `JWT_PUBLIC_KEY` (or `JWT_PUBLIC_KEY
 
 `POST /api/v1/sagas/book-seats` and `GET /api/v1/sagas/{id}` follow `07-api/contracts/openapi/workflow-service.yaml` in `csp-docs`. The state of the sagas lives in schema `workflow` of PostgreSQL (ADR-065, amended). `db/` holds its Flyway migrations (`migrations/`) and their reversions (`rollbacks/`, run by an operator from the highest version down). Apply them before the service starts with `docker compose -f deploy/compose.yml --profile tooling run --rm workflow-db-migrate`. The service itself reads `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME` and `SPRING_DATASOURCE_PASSWORD`; `deploy/compose.yml` fills them from `WORKFLOW_APP_USER` and `WORKFLOW_APP_PASSWORD`, and `SERVICE_TOKEN` from `WORKFLOW_SERVICE_TOKEN`, because those names already belong to other services in the shared platform environment. Its login (`workflow_app`) must exist before the migrations run; the migration `V005` makes it a member of the role `workflow_writer`, which `V003` creates. When the service starts it finishes the sagas the previous process left running (`RunBookSeatsSaga.recover`): it repeats the step that was begun, which is safe because every call carries the key `<sagaId>:<step>`, or finishes the compensation that was under way. It runs once at startup and is not a scheduled job (norm 4.3); a saga that fails to recover is logged for a person to look at.
 
+## End-to-end test
+
+`tests/e2e/` proves the saga `book-seats` against the real `csp-booking-api` and `csp-catalog-api` (the last box of "Cómo se verifica" of Annex E). It needs Docker, Git, `curl` and `openssl`, and a folder with the sibling `csp-*` repositories. It never touches them or the platform you run for development: `up.sh` copies `origin/develop` of every sibling with `git archive` (and this checkout's `HEAD` for the workflow) into a disposable folder, generates random passwords and a throwaway key pair, and starts the Compose project `csp-e2e` with the gateway on `localhost:8000` (the port must be free).
+
+```bash
+export REPOS_DIR=/path/to/Repositorios        # the folder that holds csp-booking-api, csp-catalog-api, ...
+sh tests/e2e/up.sh                            # copy, build, migrate, start, seed Catalog (several minutes)
+sh tests/e2e/book-seats.sh | tee e2e.log      # prints PASS/FAIL per check and the totals; exit status 1 on any failure
+sh tests/e2e/down.sh                          # removes containers, images, volumes and the copy; keeps the network `platform`
+```
+
+`E2E_WORK` moves the disposable folder (default `$TMPDIR/csp-e2e`). `BOOKING_API_REF` tests another ref of `csp-booking-api` (default `origin/develop`), for example a fix that is not merged yet. The script seeds a fresh showtime in each run, so it can be repeated on the same platform copy.
+
+What it checks: the happy path (`COMPLETED`, the reservation `CONFIRMED` in Booking); a confirmation that fails because the hold expired in Booking while the saga was running, so the hold is released and the saga is `COMPENSATED` with `failedStep` `confirm-reservation`; a hold that fails; idempotency (`200` and no new step on a repeat, `409` for another payload); the credential, the key `<sagaId>:<step>` and the `X-Correlation-Id` of every call, read in the audit log, the idempotency table and the outbox of Booking; that the answer never carries the failure detail kept in `workflow.saga.failure_detail`; the `401`, `403`, `400` and `404` of the entry; the repeatability of confirm and release in Booking; and the recovery of a saga when the container is killed in the middle of the confirmation.
+
+Two pieces are not the real thing, and the script says so when it runs:
+
+- A recording proxy (`tap.py`, container `csp-e2e-booking-tap`) sits between the workflow and Booking. Booking does not log the `Idempotency-Key` of a confirm or a release, so the proxy writes it, the `X-Correlation-Id` and the SHA-256 of the token (never the token) for each call, and delays a confirm when the test asks. It forwards every call to the real Booking.
+- While `csp-booking-api` `develop` validates `movieTitle` and `roomName` as required in `POST /internal/workflow/holds` (the contract says they are optional when Catalog is configured), the proxy adds them to the hold. The script probes Booking directly first and prints `KNOWN BOOKING DEFECT` while the probe answers `400`; once Booking accepts the hold without them, the proxy leaves the body alone. Without the patch the saga ends `COMPENSATED` at `hold-seats` against Booking `develop`.
+
 ## Branching
 
 Three permanent branches. **None of them accepts a direct commit** â€” you enter through a child
