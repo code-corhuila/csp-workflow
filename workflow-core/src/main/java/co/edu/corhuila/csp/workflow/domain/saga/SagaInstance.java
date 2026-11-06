@@ -18,6 +18,7 @@ public final class SagaInstance {
     private final String sagaName;
     private final UUID userId;
     private final String idempotencyKey;
+    private final String correlationId;
     private final SagaInput input;
     private final Instant createdAt;
     private final List<String> completedSteps = new ArrayList<>();
@@ -30,24 +31,31 @@ public final class SagaInstance {
     private long version;
     private Instant updatedAt;
 
-    private SagaInstance(UUID id, String sagaName, UUID userId, String idempotencyKey, SagaInput input, Instant now) {
+    private SagaInstance(UUID id, String sagaName, UUID userId, String correlationId, String idempotencyKey,
+                         SagaInput input, Instant now) {
         this.id = Objects.requireNonNull(id);
         this.sagaName = Objects.requireNonNull(sagaName);
         this.userId = Objects.requireNonNull(userId);
+        this.correlationId = Objects.requireNonNull(correlationId);
         this.idempotencyKey = Objects.requireNonNull(idempotencyKey);
         this.input = Objects.requireNonNull(input);
         this.createdAt = Objects.requireNonNull(now);
         this.updatedAt = now;
     }
 
-    public static SagaInstance start(UUID id, String sagaName, UUID userId, String idempotencyKey, SagaInput input,
-                                     Instant now) {
-        return new SagaInstance(id, sagaName, userId, idempotencyKey, input, now);
+    /** The correlation id is the one of the request that started the saga: every call of the saga carries it. */
+    public static SagaInstance start(UUID id, String sagaName, UUID userId, String correlationId,
+                                     String idempotencyKey, SagaInput input, Instant now) {
+        return new SagaInstance(id, sagaName, userId, correlationId, idempotencyKey, input, now);
     }
 
-    /** Gives back a saga a store persisted, in the very state it was saved. */
+    /**
+     * Gives back a saga a store persisted, in the very state it was saved. A saga stored before the correlation id was
+     * kept has none: its own id stands in for it, which is stable across restarts and finds its lines in the logs.
+     */
     public static SagaInstance restore(SagaSnapshot snapshot) {
-        SagaInstance saga = new SagaInstance(snapshot.id(), snapshot.sagaName(), snapshot.userId(),
+        String correlationId = snapshot.correlationId() == null ? snapshot.id().toString() : snapshot.correlationId();
+        SagaInstance saga = new SagaInstance(snapshot.id(), snapshot.sagaName(), snapshot.userId(), correlationId,
                 snapshot.idempotencyKey(), snapshot.input(), snapshot.createdAt());
         saga.completedSteps.addAll(snapshot.completedSteps());
         saga.compensatedSteps.addAll(snapshot.compensatedSteps());
@@ -62,7 +70,7 @@ public final class SagaInstance {
     }
 
     public SagaSnapshot snapshot() {
-        return new SagaSnapshot(id, sagaName, userId, idempotencyKey, input, status, List.copyOf(completedSteps),
+        return new SagaSnapshot(id, sagaName, userId, idempotencyKey, correlationId, input, status, List.copyOf(completedSteps),
                 List.copyOf(compensatedSteps), currentStep, failedStep, failureDetail, reservationId, version,
                 createdAt, updatedAt);
     }
@@ -146,6 +154,7 @@ public final class SagaInstance {
     public String sagaName() { return sagaName; }
     public UUID userId() { return userId; }
     public String idempotencyKey() { return idempotencyKey; }
+    public String correlationId() { return correlationId; }
     public SagaInput input() { return input; }
     public SagaStatus status() { return status; }
     public List<String> completedSteps() { return List.copyOf(completedSteps); }

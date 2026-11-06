@@ -25,7 +25,8 @@ import java.util.UUID;
 /**
  * Orchestrated Saga (ADR-066): hold the seats, then confirm the reservation. The confirmation has no
  * compensation and goes last; if it fails the hold is released. The state is saved before and after every step
- * and every call carries the key {@code <sagaId>:<step>} (Idempotent Receiver on the participant).
+ * and every call carries the key {@code <sagaId>:<step>} (Idempotent Receiver on the participant) and the correlation
+ * id of the request that started the saga, also when a restart resumes it.
  */
 public final class RunBookSeatsSaga implements StartBookSeatsSaga, GetSaga, RecoverSagas {
 
@@ -52,8 +53,8 @@ public final class RunBookSeatsSaga implements StartBookSeatsSaga, GetSaga, Reco
         if (existing.isPresent()) {
             return replay(existing.get(), command);
         }
-        SagaInstance saga = SagaInstance.start(ids.next(), SAGA_NAME, command.userId(), command.idempotencyKey(),
-                command.input(), clock.instant());
+        SagaInstance saga = SagaInstance.start(ids.next(), SAGA_NAME, command.userId(), command.correlationId(),
+                command.idempotencyKey(), command.input(), clock.instant());
         try {
             store.save(saga);
         } catch (SagaAlreadyStartedException race) {
@@ -108,13 +109,13 @@ public final class RunBookSeatsSaga implements StartBookSeatsSaga, GetSaga, Reco
         try {
             if (!saga.completedSteps().contains(HOLD_SEATS)) {
                 beginStep(saga, HOLD_SEATS);
-                saga.attachReservation(booking.hold(key(saga, HOLD_SEATS), saga.userId(),
+                saga.attachReservation(booking.hold(key(saga, HOLD_SEATS), saga.correlationId(), saga.userId(),
                         saga.input().showtimeId(), saga.input().seatLabels()));
                 completeStep(saga, HOLD_SEATS);
             }
             if (!saga.completedSteps().contains(CONFIRM_RESERVATION)) {
                 beginStep(saga, CONFIRM_RESERVATION);
-                booking.confirm(key(saga, CONFIRM_RESERVATION), saga.reservationId());
+                booking.confirm(key(saga, CONFIRM_RESERVATION), saga.correlationId(), saga.reservationId());
                 saga.completeStep(CONFIRM_RESERVATION, clock.instant());
             }
             saga.complete(clock.instant());
@@ -130,7 +131,7 @@ public final class RunBookSeatsSaga implements StartBookSeatsSaga, GetSaga, Reco
     private void compensate(SagaInstance saga) {
         for (String step : saga.pendingCompensations()) {
             try {
-                booking.release(key(saga, RELEASE_SEATS), saga.reservationId());
+                booking.release(key(saga, RELEASE_SEATS), saga.correlationId(), saga.reservationId());
                 saga.stepCompensated(step, clock.instant());
             } catch (ParticipantFailedException failure) {
                 saga.compensationFailed(RELEASE_SEATS, failure.getMessage(), clock.instant());
