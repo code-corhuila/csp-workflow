@@ -162,7 +162,7 @@ section "2. Confirmation fails after the hold: the hold is released"
 # The hold of the saga is released in Booking (as the expiration sweep of csp-worker would do) while the confirm is held back
 # by the proxy. The real Booking then answers 422 INVALID_STATUS_TRANSITION to the confirm.
 U2=$(new_uuid); T2=$(mint_token "$U2" csp-api 30); K2=e2e-expired-$(new_uuid); C2=$(new_uuid)
-curl -s -XPOST "$TAP/__tap/config" -d '{"confirm_delay_ms":3500}' >/dev/null
+curl -s -XPOST "$TAP/__tap/config" -d '{"confirm_delay_ms":6000}' >/dev/null
 curl -s -m 90 -D "$W/bg.h" -o "$W/bg.b" -w '%{http_code}' -X POST "$GATEWAY/api/v1/sagas/book-seats" \
     -H "Authorization: Bearer $T2" -H "Idempotency-Key: $K2" -H "X-Correlation-Id: $C2" -H 'Content-Type: application/json' \
     -d "{\"showtimeId\":\"$SHOWTIME\",\"seatLabels\":[\"B1\",\"B2\"]}" > "$W/bg.code" &
@@ -199,13 +199,14 @@ expect "the saga is COMPENSATED" "$(jget status)" COMPENSATED
 expect "failedStep is hold-seats" "$(jget failedStep)" hold-seats
 expect "no reservationId" "$(jget reservationId)" null
 expect "no step is reported as completed" "$(printf '%s' "$BODY" | grep -o '"completedSteps":\[[^]]*\]')" '"completedSteps":[]'
+SAGA4=$(jget id)
 
 # ---------------------------------------------------------------------------------------------------------------
 section "2c. The confirmation and the compensation both fail: the saga is FAILED (the real Booking answers 500)"
 # While the proxy holds the confirm back, a trigger of the disposable database makes every update of a reservation raise an
 # error, so the real Booking answers 500 to the confirm and then to the release of the compensation. Booking is not edited.
 U6=$(new_uuid); T6=$(mint_token "$U6" csp-api 30); K6=e2e-failed-$(new_uuid); C6=$(new_uuid)
-curl -s -XPOST "$TAP/__tap/config" -d '{"confirm_delay_ms":3500}' >/dev/null
+curl -s -XPOST "$TAP/__tap/config" -d '{"confirm_delay_ms":6000}' >/dev/null
 curl -s -m 90 -o "$W/bg6.b" -w '%{http_code}' -X POST "$GATEWAY/api/v1/sagas/book-seats" \
     -H "Authorization: Bearer $T6" -H "Idempotency-Key: $K6" -H "X-Correlation-Id: $C6" -H 'Content-Type: application/json' \
     -d "{\"showtimeId\":\"$SHOWTIME\",\"seatLabels\":[\"D1\",\"D2\"]}" > "$W/bg6.code" &
@@ -235,7 +236,6 @@ expect_absent "the answer does not carry the error code of Booking" "$BODY" INTE
 
 # ---------------------------------------------------------------------------------------------------------------
 section "5. The answer never carries the internal detail of a failure"
-SAGA4=$(jget id)
 DETAIL2=$(psql_admin "select failure_detail from workflow.saga where id='$SAGA2'")
 DETAIL4=$(psql_admin "select failure_detail from workflow.saga where id='$SAGA4'")
 expect_match "workflow.saga.failure_detail keeps the detail of the failed confirm" "$DETAIL2" '422'
