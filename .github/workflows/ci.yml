@@ -1,0 +1,44 @@
+name: ci
+
+# Every pull request builds the repository and runs its tests on a clean machine (Annex I).
+
+on:
+  pull_request:
+    branches: [develop, qa, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - run: mvn -B verify
+      # The jar of workflow-app must start on its own: without the repackaging it has no main class and
+      # the container cannot run, and nothing else would fail.
+      - name: The jar is executable
+        run: |
+          unzip -p workflow-app/target/workflow-app-0.1.0.jar META-INF/MANIFEST.MF | grep -q '^Main-Class: org.springframework.boot.loader'
+      # The image is what csp-infra composes: build it, start it and ask for its liveness.
+      - name: The image builds and answers its health check
+        run: |
+          docker build -f deploy/Dockerfile -t csp-workflow:ci .
+          docker run -d --name workflow-ci -p 8086:8086 csp-workflow:ci
+          for i in $(seq 1 30); do
+            curl -fs http://localhost:8086/api/v1/health && exit 0
+            sleep 2
+          done
+          docker logs workflow-ci
+          exit 1
