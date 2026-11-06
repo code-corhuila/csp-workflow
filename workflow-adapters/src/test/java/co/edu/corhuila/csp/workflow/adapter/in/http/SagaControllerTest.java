@@ -13,6 +13,7 @@ import co.edu.corhuila.csp.workflow.application.port.in.GetSaga;
 import co.edu.corhuila.csp.workflow.application.port.in.StartBookSeatsSaga;
 import co.edu.corhuila.csp.workflow.application.port.in.StartResult;
 import co.edu.corhuila.csp.workflow.domain.saga.IdempotencyKeyConflictException;
+import co.edu.corhuila.csp.workflow.domain.saga.SagaInput;
 import co.edu.corhuila.csp.workflow.domain.saga.SagaInstance;
 import co.edu.corhuila.csp.workflow.domain.saga.UnknownSagaException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -36,6 +37,7 @@ class SagaControllerTest {
     private static final UUID RESERVATION = UUID.fromString("9cfcfeec-c4b6-4d76-a0b4-f0db602d7caa");
     private static final String BODY = "{\"showtimeId\":\"22222222-2222-4222-8222-222222222222\",\"seatLabels\":[\"A1\",\"A2\"]}";
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final SagaInput INPUT = new SagaInput(UUID.fromString("22222222-2222-4222-8222-222222222222"), List.of("A1", "A2"));
 
     private final List<BookSeatsCommand> started = new ArrayList<>();
     private StartResult nextResult;
@@ -63,7 +65,7 @@ class SagaControllerTest {
     }
 
     private static SagaInstance completed() {
-        SagaInstance saga = SagaInstance.start(SAGA_ID, "book-seats", USER, "key-0000000000001", "fp",
+        SagaInstance saga = SagaInstance.start(SAGA_ID, "book-seats", USER, "key-0000000000001", INPUT,
                 Instant.parse("2026-11-05T10:00:00Z"));
         saga.beginStep("hold-seats", Instant.parse("2026-11-05T10:00:01Z"));
         saga.attachReservation(RESERVATION);
@@ -165,7 +167,7 @@ class SagaControllerTest {
 
     @Test
     void aFailedSagaNeverShowsItsInternalDetail() throws Exception {
-        SagaInstance failed = SagaInstance.start(SAGA_ID, "book-seats", USER, "key-0000000000001", "fp",
+        SagaInstance failed = SagaInstance.start(SAGA_ID, "book-seats", USER, "key-0000000000001", INPUT,
                 Instant.parse("2026-11-05T10:00:00Z"));
         failed.beginStep("hold-seats", Instant.parse("2026-11-05T10:00:01Z"));
         failed.stepFailed("hold-seats", "booking hold answered 503 at secret-host.internal",

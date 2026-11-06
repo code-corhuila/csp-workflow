@@ -46,7 +46,7 @@ public final class RunBookSeatsSaga implements StartBookSeatsSaga, GetSaga {
             return replay(existing.get(), command);
         }
         SagaInstance saga = SagaInstance.start(ids.next(), SAGA_NAME, command.userId(), command.idempotencyKey(),
-                command.fingerprint(), clock.instant());
+                command.input(), clock.instant());
         store.save(saga);
         run(saga, command);
         return new StartResult(saga, true);
@@ -59,7 +59,7 @@ public final class RunBookSeatsSaga implements StartBookSeatsSaga, GetSaga {
     }
 
     private StartResult replay(SagaInstance saga, BookSeatsCommand command) {
-        if (!saga.fingerprint().equals(command.fingerprint())) {
+        if (!saga.input().fingerprint().equals(command.input().fingerprint())) {
             throw new IdempotencyKeyConflictException();
         }
         return new StartResult(saga, false);
