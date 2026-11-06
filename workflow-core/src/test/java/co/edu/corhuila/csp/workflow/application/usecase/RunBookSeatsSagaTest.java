@@ -40,7 +40,7 @@ class RunBookSeatsSagaTest {
     private static final UUID USER_ID = UUID.fromString("11111111-1111-4111-8111-111111111111");
     private static final UUID SHOWTIME_ID = UUID.fromString("22222222-2222-4222-8222-222222222222");
     private static final String CORRELATION_ID = "corr-of-the-request";
-    private static final String CORRELATION_BEFORE_RESTART = CORRELATION_BEFORE_RESTART;
+    private static final String CORRELATION_BEFORE_RESTART = "corr-before-restart";
 
     private FakeBooking booking;
     private FakeStore store;
