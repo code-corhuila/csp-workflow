@@ -15,3 +15,9 @@ logging:
   structured:
     format:
       console: ecs
+workflow:
+  booking-url: ${BOOKING_API_URL:http://booking-api:8083/api/v1/booking}
+  http:
+    timeout-seconds: ${HTTP_TIMEOUT_SECONDS:5}
+    attempts: ${HTTP_ATTEMPTS:3}
+    backoff-ms: ${HTTP_BACKOFF_MS:200}
