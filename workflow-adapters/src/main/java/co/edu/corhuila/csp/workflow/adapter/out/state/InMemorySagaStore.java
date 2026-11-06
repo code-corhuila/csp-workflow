@@ -2,6 +2,10 @@ package co.edu.corhuila.csp.workflow.adapter.out.state;
 
 import co.edu.corhuila.csp.workflow.application.port.out.SagaStore;
 import co.edu.corhuila.csp.workflow.domain.saga.SagaInstance;
+import co.edu.corhuila.csp.workflow.domain.saga.SagaStatus;
+import java.time.Instant;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -30,6 +34,13 @@ public final class InMemorySagaStore implements SagaStore {
         return sagas.values().stream()
                 .filter(saga -> saga.userId().equals(userId) && saga.idempotencyKey().equals(idempotencyKey))
                 .findFirst();
+    }
+
+    @Override
+    public List<SagaInstance> findRunningUpdatedBefore(Instant cutoff) {
+        return sagas.values().stream()
+                .filter(saga -> saga.status() == SagaStatus.RUNNING && saga.updatedAt().isBefore(cutoff))
+                .sorted(Comparator.comparing(SagaInstance::updatedAt)).toList();
     }
 
     int size() {

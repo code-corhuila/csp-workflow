@@ -13,6 +13,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.sql.Array;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -87,6 +88,13 @@ public final class JdbcSagaStore implements SagaStore {
                 JdbcSagaStore::restore, userId, idempotencyKey).stream().findFirst();
     }
 
+    /** Served by {@code idx_saga_running_updated_at}: the sagas a restart may have cut. */
+    @Override
+    public List<SagaInstance> findRunningUpdatedBefore(Instant cutoff) {
+        return jdbc.query("SELECT " + COLUMNS + " FROM workflow.saga WHERE status = 'RUNNING' AND updated_at < ? "
+                + "ORDER BY updated_at", JdbcSagaStore::restore, at(cutoff));
+    }
+
     private static SagaInstance restore(ResultSet row, int ignored) throws SQLException {
         return SagaInstance.restore(new SagaSnapshot(row.getObject("id", UUID.class), row.getString("saga_name"),
                 row.getObject("user_id", UUID.class), row.getString("idempotency_key"), read(row.getString("input")),
@@ -124,7 +132,7 @@ public final class JdbcSagaStore implements SagaStore {
         return List.of((String[]) array.getArray());
     }
 
-    private static OffsetDateTime at(java.time.Instant instant) {
+    private static OffsetDateTime at(Instant instant) {
         return OffsetDateTime.ofInstant(instant, ZoneOffset.UTC);
     }
 }
