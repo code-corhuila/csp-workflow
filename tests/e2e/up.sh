@@ -43,7 +43,12 @@ sed -i "s|^MONGO_KEYFILE=\r\?\$|MONGO_KEYFILE=$(openssl rand -base64 48 | tr -d 
 sed -i 's|^COMPOSE_PROJECT_NAME=.*|COMPOSE_PROJECT_NAME=csp-e2e|' "$ENV_FILE"
 (cd "$INFRA_DIR" && sh scripts/dev-keys.sh >/dev/null)
 # The workflow talks to Booking through the recording proxy.
-printf 'BOOKING_API_URL=http://booking-tap:8083/api/v1/booking\n' >> "$ENV_FILE"
+# The proxy holds a confirm back for up to 6 s in some checks (the gateway gives up after 10 s), so the timeout of the participant calls is raised from its default
+# of 5 s; the retries and the backoff keep their defaults.
+{
+    echo 'BOOKING_API_URL=http://booking-tap:8083/api/v1/booking'
+    echo 'HTTP_TIMEOUT_SECONDS=30'
+} >> "$ENV_FILE"
 
 compose up -d postgres
 until [ "$(compose logs postgres 2>&1 | grep -c 'ready to accept connections')" -ge 2 ]; do sleep 2; done
