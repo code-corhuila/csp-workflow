@@ -169,6 +169,44 @@ class JdbcSagaStoreTest {
     }
 
     @Test
+    void theLoginOfTheServiceBecomesAMemberOfTheWriterRoleWhenItExists() throws SQLException {
+        recreateSchemaWithTheLogin(true);
+
+        try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
+            ResultSet member = statement.executeQuery("SELECT pg_has_role('workflow_app', 'workflow_writer', 'MEMBER'), "
+                    + "has_table_privilege('workflow_app', 'workflow.saga', 'INSERT'), "
+                    + "has_table_privilege('workflow_app', 'workflow.saga', 'DELETE')");
+            member.next();
+            assertTrue(member.getBoolean(1));
+            assertTrue(member.getBoolean(2));
+            assertFalse(member.getBoolean(3));
+        }
+    }
+
+    @Test
+    void theMigrationsAlsoApplyBeforeTheLoginOfTheServiceExists() throws SQLException {
+        recreateSchemaWithTheLogin(false);
+
+        try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
+            ResultSet table = statement.executeQuery("SELECT to_regclass('workflow.saga') IS NOT NULL");
+            table.next();
+            assertTrue(table.getBoolean(1));
+        }
+    }
+
+    /** The login is created by csp-infra-postgres before the migrations run: with it, or without it, as in a bare database. */
+    private static void recreateSchemaWithTheLogin(boolean loginExists) throws SQLException {
+        try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
+            statement.execute("DROP SCHEMA IF EXISTS workflow CASCADE");
+            statement.execute("DROP ROLE IF EXISTS workflow_app");
+            if (loginExists) {
+                statement.execute("CREATE ROLE workflow_app LOGIN PASSWORD 'test'");
+            }
+        }
+        migration().migrate();
+    }
+
+    @Test
     void theDatabaseItselfRefusesAnUnknownStatusAndAShortKey() throws SQLException {
         try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
             String values = " VALUES ('" + UUID.randomUUID() + "', 'book-seats', '%s', '" + USER + "', '%s', '{}', 1, now(), now())";
