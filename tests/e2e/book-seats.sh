@@ -104,6 +104,8 @@ if [ "$DEFECT" = 0 ]; then
     expect_match "Booking: the snapshot of the title and the room comes from Catalog, not from the request" \
         "$(psql_admin "select movie_title_snapshot||'/'||room_name_snapshot from booking.seat_hold where id='$RES1'")" '^E2E Synthetic Movie [0-9a-f]+/E2E Room [0-9a-f]+$'
     expect "Booking: the total is the price of the showtime times two seats" "$(psql_admin "select total_amount from booking.reservation where id='$RES1'")" 3000000
+    expect_match "Booking: the confirmed event carries the start time of the showtime from Catalog" \
+        "$(psql_admin "select payload->'payload'->>'showtimeStartsAt' from booking.outbox_event where aggregate_id='$RES1' and event_type='BookingConfirmed'")" '^[0-9]{4}-06-01T18:00:00'
 fi
 expect "Booking: both seats are CONFIRMED" "$(psql_admin "select count(*) from booking.seat_hold_item where hold_id='$RES1' and status='CONFIRMED'")" 2
 req GET "/api/v1/sagas/$SAGA1" "$T1" "" ""
@@ -162,7 +164,7 @@ section "2. Confirmation fails after the hold: the hold is released"
 # The hold of the saga is released in Booking (as the expiration sweep of csp-worker would do) while the confirm is held back
 # by the proxy. The real Booking then answers 422 INVALID_STATUS_TRANSITION to the confirm.
 U2=$(new_uuid); T2=$(mint_token "$U2" csp-api 30); K2=e2e-expired-$(new_uuid); C2=$(new_uuid)
-curl -s -XPOST "$TAP/__tap/config" -d '{"confirm_delay_ms":3500}' >/dev/null
+curl -s -XPOST "$TAP/__tap/config" -d '{"confirm_delay_ms":6000}' >/dev/null
 curl -s -m 90 -D "$W/bg.h" -o "$W/bg.b" -w '%{http_code}' -X POST "$GATEWAY/api/v1/sagas/book-seats" \
     -H "Authorization: Bearer $T2" -H "Idempotency-Key: $K2" -H "X-Correlation-Id: $C2" -H 'Content-Type: application/json' \
     -d "{\"showtimeId\":\"$SHOWTIME\",\"seatLabels\":[\"B1\",\"B2\"]}" > "$W/bg.code" &
@@ -199,10 +201,43 @@ expect "the saga is COMPENSATED" "$(jget status)" COMPENSATED
 expect "failedStep is hold-seats" "$(jget failedStep)" hold-seats
 expect "no reservationId" "$(jget reservationId)" null
 expect "no step is reported as completed" "$(printf '%s' "$BODY" | grep -o '"completedSteps":\[[^]]*\]')" '"completedSteps":[]'
+SAGA4=$(jget id)
+
+# ---------------------------------------------------------------------------------------------------------------
+section "2c. The confirmation and the compensation both fail: the saga is FAILED (the real Booking answers 500)"
+# While the proxy holds the confirm back, a trigger of the disposable database makes every update of a reservation raise an
+# error, so the real Booking answers 500 to the confirm and then to the release of the compensation. Booking is not edited.
+U6=$(new_uuid); T6=$(mint_token "$U6" csp-api 30); K6=e2e-failed-$(new_uuid); C6=$(new_uuid)
+curl -s -XPOST "$TAP/__tap/config" -d '{"confirm_delay_ms":6000}' >/dev/null
+curl -s -m 90 -o "$W/bg6.b" -w '%{http_code}' -X POST "$GATEWAY/api/v1/sagas/book-seats" \
+    -H "Authorization: Bearer $T6" -H "Idempotency-Key: $K6" -H "X-Correlation-Id: $C6" -H 'Content-Type: application/json' \
+    -d "{\"showtimeId\":\"$SHOWTIME\",\"seatLabels\":[\"D1\",\"D2\"]}" > "$W/bg6.code" &
+BG6=$!
+tries=0
+until [ "$(tap_lines "corr=$C6" | grep -c 'holds status=201')" = 1 ] || [ $tries -ge 100 ]; do sleep 0.2; tries=$((tries + 1)); done
+psql_admin "CREATE FUNCTION public.e2e_block_reservation_update() RETURNS trigger LANGUAGE plpgsql AS \$\$ BEGIN RAISE EXCEPTION 'e2e fault injection'; END \$\$; CREATE TRIGGER e2e_block_reservation_update BEFORE UPDATE ON booking.reservation FOR EACH ROW EXECUTE FUNCTION public.e2e_block_reservation_update()" > /dev/null
+curl -s -XPOST "$TAP/__tap/config" -d '{"confirm_delay_ms":0}' >/dev/null
+wait $BG6
+psql_admin "DROP TRIGGER e2e_block_reservation_update ON booking.reservation; DROP FUNCTION public.e2e_block_reservation_update()" > /dev/null
+CODE=$(cat "$W/bg6.code"); BODY=$(cat "$W/bg6.b")
+SAGA6=$(jget id); RES6=$(jget reservationId)
+expect "POST answers 201" "$CODE" 201
+expect "the saga is FAILED" "$(jget status)" FAILED
+expect "failedStep is confirm-reservation" "$(jget failedStep)" confirm-reservation
+expect_match "the hold is still reported as completed" "$(printf '%s' "$BODY" | grep -o '"completedSteps":\[[^]]*\]')" 'hold-seats'
+CALLS6=$(tap_lines "$SAGA6")
+expect "Booking answered 500 to the three attempts of the confirm, all with the same key" \
+    "$(printf '%s\n' "$CALLS6" | grep -c "$RES6/confirm status=500 idem=$SAGA6:confirm-reservation corr=$C6 ")" 3
+expect "Booking answered 500 to the three attempts of the release, all with the same key" \
+    "$(printf '%s\n' "$CALLS6" | grep -c "$RES6/release status=500 idem=$SAGA6:release-seats corr=$C6 ")" 3
+expect "Booking: the reservation stays HELD (the expiration sweep of the worker will take it)" "$(reservation_status "$RES6")" HELD
+DETAIL6=$(psql_admin "select failure_detail from workflow.saga where id='$SAGA6'")
+expect_match "workflow.saga.failure_detail keeps the detail of the failure" "$DETAIL6" '500'
+expect_absent "the answer does not carry the detail" "$BODY" "$DETAIL6"
+expect_absent "the answer does not carry the error code of Booking" "$BODY" INTERNAL_ERROR
 
 # ---------------------------------------------------------------------------------------------------------------
 section "5. The answer never carries the internal detail of a failure"
-SAGA4=$(jget id)
 DETAIL2=$(psql_admin "select failure_detail from workflow.saga where id='$SAGA2'")
 DETAIL4=$(psql_admin "select failure_detail from workflow.saga where id='$SAGA4'")
 expect_match "workflow.saga.failure_detail keeps the detail of the failed confirm" "$DETAIL2" '422'
@@ -282,7 +317,12 @@ expect "the hold was not repeated: one hold call and one reservation" "$(printf 
 expect "every call of the saga used the key <sagaId>:<step>" \
     "$(printf '%s\n' "$CALLS5" | grep -vc "idem=$SAGA5:\(hold-seats\|confirm-reservation\) ")" 0
 expect "no release was sent" "$(printf '%s\n' "$CALLS5" | grep -c '/release')" 0
+expect "the steps resumed after the restart carry the X-Correlation-Id of the original request" \
+    "$(printf '%s\n' "$CALLS5" | grep -vc "corr=$C5 ")" 0
+expect "Booking: the confirmed event carries the correlation id of the original request" \
+    "$(psql_admin "select payload->'metadata'->>'correlationId' from booking.outbox_event where aggregate_id='$RES5' and event_type='BookingConfirmed'")" "$C5"
 expect "Booking wrote one BookingConfirmed for it" "$(psql_admin "select count(*) from booking.outbox_event where aggregate_id='$RES5' and event_type='BookingConfirmed'")" 1
+expect "the restart left the FAILED saga of section 2c alone" "$(psql_admin "select status from workflow.saga where id='$SAGA6'")" FAILED
 docker logs "$WORKFLOW" 2>&1 | grep -q 'saga recovery resumed=1' && pass "the workflow logged saga recovery resumed=1" || fail "the workflow logged saga recovery resumed=1" "line not found"
 
 # ---------------------------------------------------------------------------------------------------------------
