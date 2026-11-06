@@ -14,5 +14,6 @@ and is tagged `v<version>` once it is merged.
 
 ### Added
 
+- Domain `saga` and the orchestrator of the saga `book-seats` (HU-CONCESSIONS-004, ADR-066): `SagaInstance` with its state machine (`RUNNING`, `COMPLETED`, `COMPENSATED`, `FAILED`), the ports (start and get a saga, the Booking participant, the saga store, the id generator) and `RunBookSeatsSaga`, which holds the seats, confirms the reservation, saves the state before and after every step, sends the key `<sagaId>:<step>` to every call, releases the hold if the confirmation fails and ends `FAILED` if the release fails. The same user, key and request return the first saga and run nothing. No adapter yet: the participant, the store and the HTTP entry come in the next pull requests.
 - Base structure of the repository (Annex E, ADR-064): three Maven modules (`workflow-core`, `workflow-adapters`, `workflow-app`), the liveness endpoint `GET /api/v1/health`, `deploy/Dockerfile` and `deploy/compose.yml`, `.env.example` and the `ci.yml` workflow. The saga is not implemented yet.
 - `CHANGELOG.md`.
