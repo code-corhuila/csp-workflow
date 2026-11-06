@@ -52,7 +52,7 @@ sh tests/e2e/book-seats.sh | tee e2e.log      # prints PASS/FAIL per check and t
 sh tests/e2e/down.sh                          # removes containers, images, volumes and the copy; keeps the network `platform`
 ```
 
-`E2E_WORK` moves the disposable folder (default `$TMPDIR/csp-e2e`). The script seeds a fresh showtime in each run, so it can be repeated on the same platform copy.
+`E2E_WORK` moves the disposable folder (default `$TMPDIR/csp-e2e`). `BOOKING_API_REF` tests another ref of `csp-booking-api` (default `origin/develop`), for example a fix that is not merged yet. The script seeds a fresh showtime in each run, so it can be repeated on the same platform copy.
 
 What it checks: the happy path (`COMPLETED`, the reservation `CONFIRMED` in Booking); a confirmation that fails because the hold expired in Booking while the saga was running, so the hold is released and the saga is `COMPENSATED` with `failedStep` `confirm-reservation`; a hold that fails; idempotency (`200` and no new step on a repeat, `409` for another payload); the credential, the key `<sagaId>:<step>` and the `X-Correlation-Id` of every call, read in the audit log, the idempotency table and the outbox of Booking; that the answer never carries the failure detail kept in `workflow.saga.failure_detail`; the `401`, `403`, `400` and `404` of the entry; the repeatability of confirm and release in Booking; and the recovery of a saga when the container is killed in the middle of the confirmation.
 
