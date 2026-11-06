@@ -42,25 +42,29 @@ class SagaRestartTest {
 
     private static final class RecordingBooking implements BookingParticipant {
         final List<String> calls = new ArrayList<>();
+        final List<String> correlations = new ArrayList<>();
         boolean dieOnConfirm;
 
         @Override
-        public UUID hold(String key, UUID userId, UUID showtimeId, List<String> seatLabels) {
+        public UUID hold(String key, String correlationId, UUID userId, UUID showtimeId, List<String> seatLabels) {
             calls.add("hold " + key);
+            correlations.add(correlationId);
             return RESERVATION;
         }
 
         @Override
-        public void confirm(String key, UUID reservationId) {
+        public void confirm(String key, String correlationId, UUID reservationId) {
             calls.add("confirm " + key);
+            correlations.add(correlationId);
             if (dieOnConfirm) {
                 throw new ProcessDied();
             }
         }
 
         @Override
-        public void release(String key, UUID reservationId) {
+        public void release(String key, String correlationId, UUID reservationId) {
             calls.add("release " + key);
+            correlations.add(correlationId);
         }
     }
 
@@ -86,7 +90,7 @@ class SagaRestartTest {
     void aProcessThatDiedDuringTheConfirmationIsFinishedByTheNextOneWithoutHoldingAgain() {
         RecordingBooking dying = new RecordingBooking();
         dying.dieOnConfirm = true;
-        BookSeatsCommand command = new BookSeatsCommand(USER, "key-0000000000001", SHOWTIME, List.of("A1", "A2"));
+        BookSeatsCommand command = new BookSeatsCommand(USER, "key-0000000000001", "corr-of-the-request", SHOWTIME, List.of("A1", "A2"));
 
         assertThrows(ProcessDied.class, () -> process(dying, Instant.parse("2026-11-05T10:00:00Z")).start(command));
 
@@ -103,6 +107,8 @@ class SagaRestartTest {
         assertEquals(SagaStatus.COMPLETED, finished.status());
         assertEquals(RESERVATION, finished.reservationId());
         assertEquals(List.of("confirm " + SAGA_ID + ":confirm-reservation"), next.calls);
+        assertEquals(List.of("corr-of-the-request", "corr-of-the-request"), dying.correlations);
+        assertEquals(List.of("corr-of-the-request"), next.correlations);
         assertEquals(List.of("hold " + SAGA_ID + ":hold-seats", "confirm " + SAGA_ID + ":confirm-reservation"), dying.calls);
         assertEquals(0, process(new RecordingBooking(), Instant.parse("2026-11-05T10:06:00Z"))
                 .recover(Instant.parse("2026-11-05T10:06:00Z")).resumed().size());
@@ -111,7 +117,7 @@ class SagaRestartTest {
     @Test
     void theRepeatedRequestOfAFinishedSagaStillRunsNothing() {
         RecordingBooking booking = new RecordingBooking();
-        BookSeatsCommand command = new BookSeatsCommand(USER, "key-0000000000001", SHOWTIME, List.of("A1"));
+        BookSeatsCommand command = new BookSeatsCommand(USER, "key-0000000000001", "corr-of-the-request", SHOWTIME, List.of("A1"));
         process(booking, Instant.parse("2026-11-05T10:00:00Z")).start(command);
         booking.calls.clear();
 
