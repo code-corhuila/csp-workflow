@@ -8,6 +8,8 @@ and is tagged `v<version>` once it is merged.
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-11-06
+
 ### Changed
 
 - The README and the CODEOWNERS comments carry the identity of the project (Cinesync Platform, team `cinesync-platform`, Group 1, documentation in `csp-docs`) instead of the template identity. The owner of `*` is unchanged.
