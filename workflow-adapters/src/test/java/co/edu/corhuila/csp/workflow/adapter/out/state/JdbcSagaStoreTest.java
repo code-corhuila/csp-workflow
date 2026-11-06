@@ -153,6 +153,22 @@ class JdbcSagaStoreTest {
     }
 
     @Test
+    void onlyTheSagasStillRunningBeforeTheCutoffAreFoundOldestFirst() {
+        SagaInstance older = SagaInstance.start(UUID.randomUUID(), "book-seats", USER, "key-0000000000001", INPUT, T0);
+        SagaInstance newer = SagaInstance.start(UUID.randomUUID(), "book-seats", USER, "key-0000000000002", INPUT, T0.plusSeconds(10));
+        SagaInstance finished = SagaInstance.start(UUID.randomUUID(), "book-seats", USER, "key-0000000000003", INPUT, T0);
+        SagaInstance afterCutoff = SagaInstance.start(UUID.randomUUID(), "book-seats", USER, "key-0000000000004", INPUT, T0.plusSeconds(600));
+        finished.complete(T0);
+        for (SagaInstance saga : List.of(newer, older, finished, afterCutoff)) {
+            store.save(saga);
+        }
+
+        List<SagaInstance> found = store.findRunningUpdatedBefore(T0.plusSeconds(60));
+
+        assertEquals(List.of(older.id(), newer.id()), found.stream().map(SagaInstance::id).toList());
+    }
+
+    @Test
     void theDatabaseItselfRefusesAnUnknownStatusAndAShortKey() throws SQLException {
         try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
             String values = " VALUES ('" + UUID.randomUUID() + "', 'book-seats', '%s', '" + USER + "', '%s', '{}', 1, now(), now())";
@@ -184,6 +200,10 @@ class JdbcSagaStoreTest {
             assertTrue(writer.getBoolean(1));
             assertTrue(writer.getBoolean(2));
             assertFalse(writer.getBoolean(3));
+
+            ResultSet index = statement.executeQuery("SELECT indexdef FROM pg_indexes WHERE schemaname = 'workflow' AND indexname = 'idx_saga_running_updated_at'");
+            assertTrue(index.next());
+            assertTrue(index.getString(1).contains("WHERE (status = 'RUNNING'::text)"), index.getString(1));
         }
     }
 }

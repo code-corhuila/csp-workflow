@@ -8,12 +8,14 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import co.edu.corhuila.csp.workflow.application.port.in.BookSeatsCommand;
+import co.edu.corhuila.csp.workflow.application.port.in.RecoveryResult;
 import co.edu.corhuila.csp.workflow.application.port.in.StartResult;
 import co.edu.corhuila.csp.workflow.application.port.out.BookingParticipant;
 import co.edu.corhuila.csp.workflow.application.port.out.IdGenerator;
 import co.edu.corhuila.csp.workflow.application.port.out.ParticipantFailedException;
 import co.edu.corhuila.csp.workflow.application.port.out.SagaAlreadyStartedException;
 import co.edu.corhuila.csp.workflow.application.port.out.SagaStore;
+import co.edu.corhuila.csp.workflow.application.port.out.StaleSagaException;
 import co.edu.corhuila.csp.workflow.domain.saga.IdempotencyKeyConflictException;
 import co.edu.corhuila.csp.workflow.domain.saga.SagaInput;
 import co.edu.corhuila.csp.workflow.domain.saga.SagaInstance;
@@ -160,6 +162,129 @@ class RunBookSeatsSagaTest {
         assertEquals(List.of(), booking.calls);
     }
 
+    private static final Instant EARLY = Instant.parse("2026-11-05T09:00:00Z");
+    private static final Instant CUTOFF = Instant.parse("2026-11-05T10:00:00Z");
+
+    /** A saga that was running when the process died, saved as the orchestrator leaves it before each call. */
+    private SagaInstance interrupted(UUID id, String stoppedAt) {
+        SagaInstance cut = SagaInstance.start(id, "book-seats", USER_ID, "key-" + id, new SagaInput(SHOWTIME_ID, List.of("A1")), EARLY);
+        if (!stoppedAt.equals("inserted")) {
+            cut.beginStep("hold-seats", EARLY);
+        }
+        if (!stoppedAt.equals("inserted") && !stoppedAt.equals("hold")) {
+            cut.attachReservation(RESERVATION_ID);
+            cut.completeStep("hold-seats", EARLY);
+        }
+        if (stoppedAt.equals("confirm") || stoppedAt.equals("compensation")) {
+            cut.beginStep("confirm-reservation", EARLY);
+        }
+        if (stoppedAt.equals("compensation")) {
+            cut.stepFailed("confirm-reservation", "booking confirm answered 503", EARLY);
+        }
+        store.save(cut);
+        return cut;
+    }
+
+    @Test
+    void aSagaCutBeforeItsFirstCallRunsFromTheBeginning() {
+        interrupted(SAGA_ID, "inserted");
+
+        RecoveryResult result = saga.recover(CUTOFF);
+
+        assertEquals(List.of(SAGA_ID), result.resumed());
+        assertEquals(SagaStatus.COMPLETED, store.findById(SAGA_ID).orElseThrow().status());
+        assertEquals(List.of("hold", "confirm"), booking.calls);
+    }
+
+    @Test
+    void aSagaCutDuringTheHoldRepeatsItWithTheSameKey() {
+        interrupted(SAGA_ID, "hold");
+
+        saga.recover(CUTOFF);
+
+        assertEquals(SagaStatus.COMPLETED, store.findById(SAGA_ID).orElseThrow().status());
+        assertEquals(List.of("hold", "confirm"), booking.calls);
+        assertEquals(SAGA_ID + ":hold-seats", booking.keys.get("hold"));
+    }
+
+    @Test
+    void aSagaCutAfterTheHoldOnlyConfirms() {
+        interrupted(SAGA_ID, "held");
+
+        saga.recover(CUTOFF);
+
+        assertEquals(SagaStatus.COMPLETED, store.findById(SAGA_ID).orElseThrow().status());
+        assertEquals(List.of("confirm"), booking.calls);
+        assertEquals(RESERVATION_ID, store.findById(SAGA_ID).orElseThrow().reservationId());
+    }
+
+    @Test
+    void aSagaCutDuringTheConfirmationRepeatsItWithTheSameKeyAndHoldsNothingAgain() {
+        interrupted(SAGA_ID, "confirm");
+
+        saga.recover(CUTOFF);
+
+        assertEquals(SagaStatus.COMPLETED, store.findById(SAGA_ID).orElseThrow().status());
+        assertEquals(List.of("confirm"), booking.calls);
+        assertEquals(SAGA_ID + ":confirm-reservation", booking.keys.get("confirm"));
+    }
+
+    @Test
+    void aSagaCutDuringItsCompensationFinishesUndoingIt() {
+        interrupted(SAGA_ID, "compensation");
+
+        saga.recover(CUTOFF);
+
+        SagaInstance recovered = store.findById(SAGA_ID).orElseThrow();
+        assertEquals(SagaStatus.COMPENSATED, recovered.status());
+        assertEquals("confirm-reservation", recovered.failedStep());
+        assertEquals(List.of("release"), booking.calls);
+        assertEquals(SAGA_ID + ":release-seats", booking.keys.get("release"));
+    }
+
+    @Test
+    void aResumedStepThatFailsIsCompensatedLikeAnyOther() {
+        interrupted(SAGA_ID, "held");
+        booking.failOn = "confirm";
+
+        saga.recover(CUTOFF);
+
+        assertEquals(SagaStatus.COMPENSATED, store.findById(SAGA_ID).orElseThrow().status());
+        assertEquals(List.of("confirm", "release"), booking.calls);
+    }
+
+    @Test
+    void onlyTheSagasThatWereRunningBeforeTheProcessStartedAreRecovered() {
+        SagaInstance recent = SagaInstance.start(SAGA_ID, "book-seats", USER_ID, "key-recent-00000001",
+                new SagaInput(SHOWTIME_ID, List.of("A1")), CUTOFF.plusSeconds(1));
+        store.save(recent);
+        SagaInstance done = interrupted(UUID.fromString("55555555-5555-4555-8555-555555555555"), "held");
+        done.complete(EARLY);
+        store.save(done);
+
+        RecoveryResult result = saga.recover(CUTOFF);
+
+        assertEquals(List.of(), result.resumed());
+        assertEquals(List.of(), booking.calls);
+    }
+
+    @Test
+    void aSagaAnotherWriterAlreadyMovedIsSkippedAndAFailingOneDoesNotStopTheOthers() {
+        UUID stale = UUID.fromString("66666666-6666-4666-8666-666666666666");
+        UUID broken = UUID.fromString("77777777-7777-4777-8777-777777777777");
+        interrupted(stale, "held");
+        interrupted(broken, "held");
+        interrupted(SAGA_ID, "held");
+        store.saveFailures.put(stale, new StaleSagaException(stale));
+        store.saveFailures.put(broken, new IllegalStateException("database is down"));
+
+        RecoveryResult result = saga.recover(CUTOFF);
+
+        assertEquals(List.of(stale), result.skipped());
+        assertEquals(List.of(broken), result.failed());
+        assertEquals(List.of(SAGA_ID), result.resumed());
+    }
+
     @Test
     void theSameKeyWithAnotherPayloadIsAConflict() {
         saga.start(command("key-0000000000001", "A1"));
@@ -215,10 +340,15 @@ class RunBookSeatsSagaTest {
         final List<String> saves = new ArrayList<>();
         /** A saga that another request inserts between the lookup and the insert of this one. */
         SagaInstance racer;
+        /** Failures to raise when a given saga is saved: another writer, or a database that is down. */
+        final Map<UUID, RuntimeException> saveFailures = new HashMap<>();
         private final Map<UUID, SagaInstance> byId = new HashMap<>();
 
         @Override
         public void save(SagaInstance saga) {
+            if (saveFailures.containsKey(saga.id())) {
+                throw saveFailures.get(saga.id());
+            }
             if (racer != null && !byId.containsKey(saga.id())) {
                 byId.put(racer.id(), racer);
                 racer = null;
@@ -241,6 +371,12 @@ class RunBookSeatsSagaTest {
             }
             return byId.values().stream()
                     .filter(s -> s.userId().equals(userId) && s.idempotencyKey().equals(key)).findFirst();
+        }
+
+        @Override
+        public List<SagaInstance> findRunningUpdatedBefore(Instant cutoff) {
+            return byId.values().stream()
+                    .filter(s -> s.status() == SagaStatus.RUNNING && s.updatedAt().isBefore(cutoff)).toList();
         }
 
         private static String join(List<String> steps) {

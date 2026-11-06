@@ -2,6 +2,8 @@ package co.edu.corhuila.csp.workflow.application.usecase;
 
 import co.edu.corhuila.csp.workflow.application.port.in.BookSeatsCommand;
 import co.edu.corhuila.csp.workflow.application.port.in.GetSaga;
+import co.edu.corhuila.csp.workflow.application.port.in.RecoverSagas;
+import co.edu.corhuila.csp.workflow.application.port.in.RecoveryResult;
 import co.edu.corhuila.csp.workflow.application.port.in.StartBookSeatsSaga;
 import co.edu.corhuila.csp.workflow.application.port.in.StartResult;
 import co.edu.corhuila.csp.workflow.application.port.out.BookingParticipant;
@@ -9,10 +11,14 @@ import co.edu.corhuila.csp.workflow.application.port.out.IdGenerator;
 import co.edu.corhuila.csp.workflow.application.port.out.ParticipantFailedException;
 import co.edu.corhuila.csp.workflow.application.port.out.SagaAlreadyStartedException;
 import co.edu.corhuila.csp.workflow.application.port.out.SagaStore;
+import co.edu.corhuila.csp.workflow.application.port.out.StaleSagaException;
 import co.edu.corhuila.csp.workflow.domain.saga.IdempotencyKeyConflictException;
 import co.edu.corhuila.csp.workflow.domain.saga.SagaInstance;
 import co.edu.corhuila.csp.workflow.domain.saga.UnknownSagaException;
 import java.time.Clock;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -21,7 +27,7 @@ import java.util.UUID;
  * compensation and goes last; if it fails the hold is released. The state is saved before and after every step
  * and every call carries the key {@code <sagaId>:<step>} (Idempotent Receiver on the participant).
  */
-public final class RunBookSeatsSaga implements StartBookSeatsSaga, GetSaga {
+public final class RunBookSeatsSaga implements StartBookSeatsSaga, GetSaga, RecoverSagas {
 
     static final String SAGA_NAME = "book-seats";
     static final String HOLD_SEATS = "hold-seats";
@@ -53,7 +59,7 @@ public final class RunBookSeatsSaga implements StartBookSeatsSaga, GetSaga {
         } catch (SagaAlreadyStartedException race) {
             return replay(store.findByUserAndKey(command.userId(), command.idempotencyKey()).orElseThrow(), command);
         }
-        run(saga, command);
+        run(saga);
         return new StartResult(saga, true);
     }
 
@@ -70,15 +76,47 @@ public final class RunBookSeatsSaga implements StartBookSeatsSaga, GetSaga {
         return new StartResult(saga, false);
     }
 
-    private void run(SagaInstance saga, BookSeatsCommand command) {
+    @Override
+    public RecoveryResult recover(Instant cutoff) {
+        List<UUID> resumed = new ArrayList<>();
+        List<UUID> skipped = new ArrayList<>();
+        List<UUID> failed = new ArrayList<>();
+        for (SagaInstance saga : store.findRunningUpdatedBefore(cutoff)) {
+            try {
+                resume(saga);
+                resumed.add(saga.id());
+            } catch (StaleSagaException anotherWriterMovedIt) {
+                skipped.add(saga.id());
+            } catch (RuntimeException unexpected) {
+                failed.add(saga.id());
+            }
+        }
+        return new RecoveryResult(resumed, skipped, failed);
+    }
+
+    /** A saga that had already failed was compensating; any other one goes on from the step it had reached. */
+    private void resume(SagaInstance saga) {
+        if (saga.failedStep() != null) {
+            compensate(saga);
+        } else {
+            run(saga);
+        }
+    }
+
+    /** Runs the steps that are not completed yet, so a saga that was cut goes on from where it was. */
+    private void run(SagaInstance saga) {
         try {
-            beginStep(saga, HOLD_SEATS);
-            saga.attachReservation(booking.hold(key(saga, HOLD_SEATS), command.userId(), command.showtimeId(),
-                    command.seatLabels()));
-            completeStep(saga, HOLD_SEATS);
-            beginStep(saga, CONFIRM_RESERVATION);
-            booking.confirm(key(saga, CONFIRM_RESERVATION), saga.reservationId());
-            saga.completeStep(CONFIRM_RESERVATION, clock.instant());
+            if (!saga.completedSteps().contains(HOLD_SEATS)) {
+                beginStep(saga, HOLD_SEATS);
+                saga.attachReservation(booking.hold(key(saga, HOLD_SEATS), saga.userId(),
+                        saga.input().showtimeId(), saga.input().seatLabels()));
+                completeStep(saga, HOLD_SEATS);
+            }
+            if (!saga.completedSteps().contains(CONFIRM_RESERVATION)) {
+                beginStep(saga, CONFIRM_RESERVATION);
+                booking.confirm(key(saga, CONFIRM_RESERVATION), saga.reservationId());
+                saga.completeStep(CONFIRM_RESERVATION, clock.instant());
+            }
             saga.complete(clock.instant());
             store.save(saga);
         } catch (ParticipantFailedException failure) {

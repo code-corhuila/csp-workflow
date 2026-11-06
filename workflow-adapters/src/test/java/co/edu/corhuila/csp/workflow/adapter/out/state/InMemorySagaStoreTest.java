@@ -51,4 +51,17 @@ class InMemorySagaStoreTest {
 
         assertEquals(1, store.size());
     }
+
+    @Test
+    void theRunningSagasBeforeTheCutoffAreFound() {
+        InMemorySagaStore store = new InMemorySagaStore();
+        SagaInstance running = saga(USER, "key-0000000000001");
+        SagaInstance finished = saga(USER, "key-0000000000002");
+        finished.complete(Instant.parse("2026-11-05T10:00:01Z"));
+        store.save(running);
+        store.save(finished);
+
+        assertEquals(List.of(running), store.findRunningUpdatedBefore(Instant.parse("2026-11-05T11:00:00Z")));
+        assertTrue(store.findRunningUpdatedBefore(Instant.parse("2026-11-05T09:00:00Z")).isEmpty());
+    }
 }
