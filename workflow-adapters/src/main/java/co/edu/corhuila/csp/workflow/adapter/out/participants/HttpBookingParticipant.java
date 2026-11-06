@@ -1,6 +1,5 @@
 package co.edu.corhuila.csp.workflow.adapter.out.participants;
 
-import co.edu.corhuila.csp.workflow.adapter.Correlation;
 import co.edu.corhuila.csp.workflow.application.port.out.BookingParticipant;
 import co.edu.corhuila.csp.workflow.application.port.out.ParticipantFailedException;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -15,12 +14,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Supplier;
-import org.slf4j.MDC;
 
 /**
  * Adapter of the Booking domain: the internal operations of ADR-035 under {@code /internal/workflow/}. Every call
  * carries the credential of the workflow (never the token of the person), the idempotency key of the step and the
- * correlation id of the request. A refusal or an unreachable service becomes a {@link ParticipantFailedException}
+ * correlation id of the saga, which is the one of the request that started it. A refusal or an unreachable service becomes a {@link ParticipantFailedException}
  * whose message keeps the status and the error code, never the body or the host.
  */
 public final class HttpBookingParticipant implements BookingParticipant {
@@ -42,9 +40,10 @@ public final class HttpBookingParticipant implements BookingParticipant {
     }
 
     @Override
-    public UUID hold(String key, UUID userId, UUID showtimeId, List<String> seatLabels) {
+    public UUID hold(String key, String correlationId, UUID userId, UUID showtimeId, List<String> seatLabels) {
         String body = write(Map.of("userId", userId, "showtimeId", showtimeId, "seatLabels", seatLabels));
-        String reply = call("hold", post("/internal/workflow/holds", key, HttpRequest.BodyPublishers.ofString(body)));
+        String reply = call("hold", post("/internal/workflow/holds", key, correlationId,
+                HttpRequest.BodyPublishers.ofString(body)));
         try {
             return UUID.fromString(JSON.readTree(reply).get("id").asText());
         } catch (IOException | RuntimeException e) {
@@ -53,24 +52,23 @@ public final class HttpBookingParticipant implements BookingParticipant {
     }
 
     @Override
-    public void confirm(String key, UUID reservationId) {
-        call("confirm", post("/internal/workflow/reservations/" + reservationId + "/confirm", key,
+    public void confirm(String key, String correlationId, UUID reservationId) {
+        call("confirm", post("/internal/workflow/reservations/" + reservationId + "/confirm", key, correlationId,
                 HttpRequest.BodyPublishers.noBody()));
     }
 
     @Override
-    public void release(String key, UUID reservationId) {
-        call("release", post("/internal/workflow/reservations/" + reservationId + "/release", key,
+    public void release(String key, String correlationId, UUID reservationId) {
+        call("release", post("/internal/workflow/reservations/" + reservationId + "/release", key, correlationId,
                 HttpRequest.BodyPublishers.noBody()));
     }
 
-    private HttpRequest post(String path, String key, HttpRequest.BodyPublisher body) {
-        String correlationId = MDC.get(Correlation.MDC_KEY);
+    private HttpRequest post(String path, String key, String correlationId, HttpRequest.BodyPublisher body) {
         return HttpRequest.newBuilder(URI.create(baseUrl + path))
                 .timeout(timeout)
                 .header("Authorization", "Bearer " + token.get())
                 .header("Idempotency-Key", key)
-                .header("X-Correlation-Id", correlationId == null ? UUID.randomUUID().toString() : correlationId)
+                .header("X-Correlation-Id", correlationId)
                 .header("Content-Type", "application/json")
                 .POST(body)
                 .build();
