@@ -1,5 +1,6 @@
 package co.edu.corhuila.csp.workflow.adapter.in.http;
 
+import co.edu.corhuila.csp.workflow.adapter.Correlation;
 import co.edu.corhuila.csp.workflow.application.port.in.GetSaga;
 import co.edu.corhuila.csp.workflow.application.port.in.StartBookSeatsSaga;
 import co.edu.corhuila.csp.workflow.application.port.in.StartResult;
@@ -7,6 +8,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.servlet.http.HttpServletRequest;
 import java.net.URI;
 import java.util.UUID;
+import org.slf4j.MDC;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -34,7 +36,9 @@ public class SagaController {
             @RequestHeader(name = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestBody(required = false) JsonNode body,
             HttpServletRequest request) {
-        StartResult result = startBookSeats.start(BookSeatsRequestParser.parse(userId, idempotencyKey, body));
+        String correlationId = MDC.get(Correlation.MDC_KEY);
+        StartResult result = startBookSeats.start(BookSeatsRequestParser.parse(userId,
+                correlationId == null ? UUID.randomUUID().toString() : correlationId, idempotencyKey, body));
         SagaResponse response = SagaResponse.from(result.saga());
         if (!result.created()) {
             return ResponseEntity.ok(response);

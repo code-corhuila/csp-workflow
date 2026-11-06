@@ -24,7 +24,7 @@ final class BookSeatsRequestParser {
 
     private BookSeatsRequestParser() { }
 
-    static BookSeatsCommand parse(UUID userId, String idempotencyKey, JsonNode body) {
+    static BookSeatsCommand parse(UUID userId, String correlationId, String idempotencyKey, JsonNode body) {
         List<FieldError> errors = new ArrayList<>();
         if (idempotencyKey == null || idempotencyKey.length() < KEY_MIN || idempotencyKey.length() > KEY_MAX) {
             errors.add(new FieldError("Idempotency-Key", "is required and must have 8 to 128 characters"));
@@ -43,7 +43,7 @@ final class BookSeatsRequestParser {
         if (!errors.isEmpty()) {
             throw new ValidationException("invalid input", errors);
         }
-        return new BookSeatsCommand(userId, idempotencyKey, showtimeId, seatLabels);
+        return new BookSeatsCommand(userId, idempotencyKey, correlationId, showtimeId, seatLabels);
     }
 
     private static UUID showtimeId(JsonNode node, List<FieldError> errors) {

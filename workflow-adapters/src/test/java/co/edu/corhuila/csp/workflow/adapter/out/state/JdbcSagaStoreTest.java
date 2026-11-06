@@ -67,7 +67,7 @@ class JdbcSagaStoreTest {
     }
 
     private static SagaInstance saga(UUID user, String key) {
-        return SagaInstance.start(UUID.randomUUID(), "book-seats", user, key, INPUT, T0);
+        return SagaInstance.start(UUID.randomUUID(), "book-seats", user, "corr-1", key, INPUT, T0);
     }
 
     @Test
@@ -120,6 +120,37 @@ class JdbcSagaStoreTest {
     }
 
     @Test
+    void theCorrelationIdOfTheRequestIsStoredWithTheSaga() throws SQLException {
+        SagaInstance saga = saga(USER, "key-0000000000001");
+        store.save(saga);
+
+        assertEquals("corr-1", store.findById(saga.id()).orElseThrow().correlationId());
+        try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement();
+             var rows = statement.executeQuery("SELECT correlation_id FROM workflow.saga WHERE id = '" + saga.id() + "'")) {
+            rows.next();
+            assertEquals("corr-1", rows.getString(1));
+        }
+    }
+
+    @Test
+    void aRowWithoutACorrelationIdIsRestoredWithTheIdOfTheSaga() throws SQLException {
+        SagaInstance saga = saga(USER, "key-0000000000001");
+        store.save(saga);
+        try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
+            statement.execute("UPDATE workflow.saga SET correlation_id = NULL WHERE id = '" + saga.id() + "'");
+        }
+
+        assertEquals(saga.id().toString(), store.findById(saga.id()).orElseThrow().correlationId());
+    }
+
+    @Test
+    void anEmptyCorrelationIdIsRefusedByTheDatabase() {
+        SagaInstance saga = SagaInstance.start(UUID.randomUUID(), "book-seats", USER, "", "key-0000000000001", INPUT, T0);
+
+        assertThrows(RuntimeException.class, () -> store.save(saga));
+    }
+
+    @Test
     void aSagaIsFoundByItsUserAndKeyAndOnlyByThem() {
         SagaInstance saga = saga(USER, "key-0000000000001");
         store.save(saga);
@@ -150,6 +181,60 @@ class JdbcSagaStoreTest {
 
         assertThrows(StaleSagaException.class, () -> store.save(second));
         assertEquals(2, store.findById(saga.id()).orElseThrow().version());
+    }
+
+    @Test
+    void onlyTheSagasStillRunningBeforeTheCutoffAreFoundOldestFirst() {
+        SagaInstance older = SagaInstance.start(UUID.randomUUID(), "book-seats", USER, "corr-1", "key-0000000000001", INPUT, T0);
+        SagaInstance newer = SagaInstance.start(UUID.randomUUID(), "book-seats", USER, "corr-1", "key-0000000000002", INPUT, T0.plusSeconds(10));
+        SagaInstance finished = SagaInstance.start(UUID.randomUUID(), "book-seats", USER, "corr-1", "key-0000000000003", INPUT, T0);
+        SagaInstance afterCutoff = SagaInstance.start(UUID.randomUUID(), "book-seats", USER, "corr-1", "key-0000000000004", INPUT, T0.plusSeconds(600));
+        finished.complete(T0);
+        for (SagaInstance saga : List.of(newer, older, finished, afterCutoff)) {
+            store.save(saga);
+        }
+
+        List<SagaInstance> found = store.findRunningUpdatedBefore(T0.plusSeconds(60));
+
+        assertEquals(List.of(older.id(), newer.id()), found.stream().map(SagaInstance::id).toList());
+    }
+
+    @Test
+    void theLoginOfTheServiceBecomesAMemberOfTheWriterRoleWhenItExists() throws SQLException {
+        recreateSchemaWithTheLogin(true);
+
+        try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
+            ResultSet member = statement.executeQuery("SELECT pg_has_role('workflow_app', 'workflow_writer', 'MEMBER'), "
+                    + "has_table_privilege('workflow_app', 'workflow.saga', 'INSERT'), "
+                    + "has_table_privilege('workflow_app', 'workflow.saga', 'DELETE')");
+            member.next();
+            assertTrue(member.getBoolean(1));
+            assertTrue(member.getBoolean(2));
+            assertFalse(member.getBoolean(3));
+        }
+    }
+
+    @Test
+    void theMigrationsAlsoApplyBeforeTheLoginOfTheServiceExists() throws SQLException {
+        recreateSchemaWithTheLogin(false);
+
+        try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
+            ResultSet table = statement.executeQuery("SELECT to_regclass('workflow.saga') IS NOT NULL");
+            table.next();
+            assertTrue(table.getBoolean(1));
+        }
+    }
+
+    /** The login is created by csp-infra-postgres before the migrations run: with it, or without it, as in a bare database. */
+    private static void recreateSchemaWithTheLogin(boolean loginExists) throws SQLException {
+        try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
+            statement.execute("DROP SCHEMA IF EXISTS workflow CASCADE");
+            statement.execute("DROP ROLE IF EXISTS workflow_app");
+            if (loginExists) {
+                statement.execute("CREATE ROLE workflow_app LOGIN PASSWORD 'test'");
+            }
+        }
+        migration().migrate();
     }
 
     @Test
@@ -184,6 +269,10 @@ class JdbcSagaStoreTest {
             assertTrue(writer.getBoolean(1));
             assertTrue(writer.getBoolean(2));
             assertFalse(writer.getBoolean(3));
+
+            ResultSet index = statement.executeQuery("SELECT indexdef FROM pg_indexes WHERE schemaname = 'workflow' AND indexname = 'idx_saga_running_updated_at'");
+            assertTrue(index.next());
+            assertTrue(index.getString(1).contains("WHERE (status = 'RUNNING'::text)"), index.getString(1));
         }
     }
 }

@@ -95,10 +95,9 @@ class HttpBookingParticipantTest {
 
     @Test
     void holdPostsTheBodyOfTheContractWithTheServiceCredential() throws Exception {
-        MDC.put("correlationId", "corr-1");
         answers.add(new Answer(201, reservationJson()));
 
-        UUID id = participant().hold(KEY, USER, SHOWTIME, List.of("A1", "A2"));
+        UUID id = participant().hold(KEY, "corr-1", USER, SHOWTIME, List.of("A1", "A2"));
 
         assertEquals(RESERVATION, id);
         Received call = received.get(0);
@@ -118,13 +117,13 @@ class HttpBookingParticipantTest {
     void aReplayedHoldAnswers200WithTheOriginalReservation() {
         answers.add(new Answer(200, reservationJson()));
 
-        assertEquals(RESERVATION, participant().hold(KEY, USER, SHOWTIME, List.of("A1")));
+        assertEquals(RESERVATION, participant().hold(KEY, "corr-1", USER, SHOWTIME, List.of("A1")));
     }
 
     @Test
     void confirmAndReleaseCallTheirOperationsWithTheirKeys() {
-        participant().confirm("saga:confirm-reservation", RESERVATION);
-        participant().release("saga:release-seats", RESERVATION);
+        participant().confirm("saga:confirm-reservation", "corr-1", RESERVATION);
+        participant().release("saga:release-seats", "corr-1", RESERVATION);
 
         assertEquals("/api/v1/booking/internal/workflow/reservations/" + RESERVATION + "/confirm", received.get(0).path());
         assertEquals("saga:confirm-reservation", received.get(0).idempotencyKey());
@@ -133,11 +132,12 @@ class HttpBookingParticipantTest {
     }
 
     @Test
-    void everyCallCarriesACorrelationIdEvenWithoutOneInTheContext() {
-        participant().confirm("saga:confirm-reservation", RESERVATION);
+    void theCorrelationIdOfTheCallIsTheOneItIsGivenAndNeverTheOneOfTheContext() {
+        MDC.put("correlationId", "corr-of-another-request");
 
-        assertNotNull(received.get(0).correlationId());
-        assertFalse(received.get(0).correlationId().isBlank());
+        participant().confirm("saga:confirm-reservation", "corr-of-the-saga", RESERVATION);
+
+        assertEquals("corr-of-the-saga", received.get(0).correlationId());
     }
 
     @Test
@@ -145,7 +145,7 @@ class HttpBookingParticipantTest {
         answers.add(new Answer(422, "{\"error\":\"INVALID_STATUS_TRANSITION\",\"message\":\"expired\"}"));
 
         ParticipantFailedException failure = assertThrows(ParticipantFailedException.class,
-                () -> participant().confirm("saga:confirm-reservation", RESERVATION));
+                () -> participant().confirm("saga:confirm-reservation", "corr-1", RESERVATION));
 
         assertEquals(1, received.size());
         assertTrue(failure.getMessage().contains("422"));
@@ -159,7 +159,7 @@ class HttpBookingParticipantTest {
         answers.add(new Answer(429, "{}"));
         answers.add(new Answer(200, "{}"));
 
-        participant().release("saga:release-seats", RESERVATION);
+        participant().release("saga:release-seats", "corr-1", RESERVATION);
 
         assertEquals(3, received.size());
         assertEquals(List.of("saga:release-seats", "saga:release-seats", "saga:release-seats"),
@@ -173,7 +173,7 @@ class HttpBookingParticipantTest {
         answers.add(new Answer(503, "{}"));
         answers.add(new Answer(200, "{}"));
 
-        participant().release("saga:release-seats", RESERVATION);
+        participant().release("saga:release-seats", "corr-1", RESERVATION);
 
         assertTrue(sleeps.get(0) >= 0 && sleeps.get(0) <= 200);
         assertTrue(sleeps.get(1) >= 0 && sleeps.get(1) <= 400);
@@ -186,7 +186,7 @@ class HttpBookingParticipantTest {
         answers.add(new Answer(503, "{}"));
 
         ParticipantFailedException failure = assertThrows(ParticipantFailedException.class,
-                () -> participant().confirm("saga:confirm-reservation", RESERVATION));
+                () -> participant().confirm("saga:confirm-reservation", "corr-1", RESERVATION));
 
         assertEquals(3, received.size());
         assertTrue(failure.getMessage().contains("503"));
@@ -198,7 +198,7 @@ class HttpBookingParticipantTest {
                 () -> token, Duration.ofSeconds(1), 3, Duration.ofMillis(100), sleeps::add);
 
         ParticipantFailedException failure = assertThrows(ParticipantFailedException.class,
-                () -> unreachable.confirm("saga:confirm-reservation", RESERVATION));
+                () -> unreachable.confirm("saga:confirm-reservation", "corr-1", RESERVATION));
 
         assertEquals(2, sleeps.size());
         assertFalse(failure.getMessage().contains("127.0.0.1"));
@@ -209,7 +209,7 @@ class HttpBookingParticipantTest {
         handlerDelayMillis = 800;
 
         assertThrows(ParticipantFailedException.class,
-                () -> participant(2, Duration.ofMillis(200)).confirm("saga:confirm-reservation", RESERVATION));
+                () -> participant(2, Duration.ofMillis(200)).confirm("saga:confirm-reservation", "corr-1", RESERVATION));
 
         assertEquals(1, sleeps.size());
     }
@@ -217,9 +217,9 @@ class HttpBookingParticipantTest {
     @Test
     void theTokenIsReadAgainOnEveryCallSoARotationNeedsNoRestart() {
         HttpBookingParticipant participant = participant();
-        participant.confirm("saga:confirm-reservation", RESERVATION);
+        participant.confirm("saga:confirm-reservation", "corr-1", RESERVATION);
         token = "service-token-2";
-        participant.confirm("saga:confirm-reservation", RESERVATION);
+        participant.confirm("saga:confirm-reservation", "corr-1", RESERVATION);
 
         assertEquals("Bearer service-token-1", received.get(0).authorization());
         assertEquals("Bearer service-token-2", received.get(1).authorization());
@@ -230,7 +230,7 @@ class HttpBookingParticipantTest {
         answers.add(new Answer(401, "{\"error\":\"UNAUTHORIZED\"}"));
 
         ParticipantFailedException failure = assertThrows(ParticipantFailedException.class,
-                () -> participant().confirm("saga:confirm-reservation", RESERVATION));
+                () -> participant().confirm("saga:confirm-reservation", "corr-1", RESERVATION));
 
         assertFalse(failure.getMessage().contains("service-token"));
     }
