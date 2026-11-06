@@ -5,6 +5,7 @@
 #
 #   REPOS_DIR  folder that holds the sibling repositories (required)
 #   E2E_WORK   where the copy lives (default: $TMPDIR/csp-e2e)
+#   BOOKING_API_REF  git ref of csp-booking-api to test (default: origin/develop), for a fix that is not merged yet
 #
 # The sibling repositories are read with `git archive origin/develop` and never modified; csp-workflow is the current
 # commit of this checkout, so the test runs the code under review. Nothing is written inside any repository.
@@ -24,8 +25,10 @@ for repo in csp-infra-postgres csp-booking-db csp-booking-api csp-auth-db csp-au
     csp-catalog-db csp-catalog-api csp-infra-redis csp-infra-rabbitmq csp-api-gateway; do
     git -C "$REPOS_DIR/$repo" fetch -q origin
     mkdir -p "$PLATFORM_DIR/$repo"
-    git -C "$REPOS_DIR/$repo" archive origin/develop | tar -x -C "$PLATFORM_DIR/$repo"
-    echo "$repo $(git -C "$REPOS_DIR/$repo" rev-parse --short origin/develop)" >> "$E2E_WORK/versions.txt"
+    ref=origin/develop
+    [ "$repo" != csp-booking-api ] || ref=${BOOKING_API_REF:-origin/develop}
+    git -C "$REPOS_DIR/$repo" archive "$ref" | tar -x -C "$PLATFORM_DIR/$repo"
+    echo "$repo $(git -C "$REPOS_DIR/$repo" rev-parse --short "$ref") ($ref)" >> "$E2E_WORK/versions.txt"
 done
 mkdir -p "$PLATFORM_DIR/csp-workflow"
 git -C "$REPO_ROOT" archive HEAD | tar -x -C "$PLATFORM_DIR/csp-workflow"

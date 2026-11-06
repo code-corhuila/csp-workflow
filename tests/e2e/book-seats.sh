@@ -70,7 +70,9 @@ expect_match "a fresh showtime was seeded in the real Catalog" "$SHOWTIME" '^[0-
 # Booking develop validates movieTitle and roomName as required although booking-service.yaml says Catalog supplies them.
 booking_direct /internal/workflow/holds probe-key-0000000000001 "$(new_uuid)" "" \
     "{\"userId\":\"$(new_uuid)\",\"showtimeId\":\"$SHOWTIME\",\"seatLabels\":[\"D6\"]}"
+DEFECT=0
 if [ "$DIRECT_CODE" = 400 ]; then
+    DEFECT=1
     echo "INFO  KNOWN BOOKING DEFECT: the internal hold without movieTitle/roomName answers 400; the recording proxy adds them (patched=1)"
     curl -s -XPOST "$TAP/__tap/config" -d '{"fill_snapshot":true}' >/dev/null
 else
@@ -91,6 +93,10 @@ expect "failedStep is null" "$(jget failedStep)" null
 expect_match "reservationId is set" "$RES1" '^[0-9a-f-]{36}$'
 expect "Booking: the reservation is CONFIRMED" "$(reservation_status "$RES1")" CONFIRMED
 expect "Booking: the reservation belongs to the user of the token" "$(psql_admin "select user_id from booking.reservation where id='$RES1'")" "$U1"
+if [ "$DEFECT" = 0 ]; then
+    expect_match "Booking: the snapshot of the title and the room comes from Catalog, not from the request" \n        "$(psql_admin "select movie_title_snapshot||'/'||room_name_snapshot from booking.seat_hold where id='$RES1'")" '^E2E Synthetic Movie [0-9a-f]+/E2E Room [0-9a-f]+$'
+    expect "Booking: the total is the price of the showtime times two seats" "$(psql_admin "select total_amount from booking.reservation where id='$RES1'")" 3000000
+fi
 expect "Booking: both seats are CONFIRMED" "$(psql_admin "select count(*) from booking.seat_hold_item where hold_id='$RES1' and status='CONFIRMED'")" 2
 req GET "/api/v1/sagas/$SAGA1" "$T1" "" ""
 expect "GET the saga answers 200" "$CODE" 200
