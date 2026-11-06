@@ -39,7 +39,7 @@ The variables are listed in `.env.example`. `JWT_PUBLIC_KEY` (or `JWT_PUBLIC_KEY
 
 ## API
 
-`POST /api/v1/sagas/book-seats` and `GET /api/v1/sagas/{id}` follow `07-api/contracts/openapi/workflow-service.yaml` in `csp-docs`. The saga state is kept in memory until the PostgreSQL store of ADR-065 lands, so a restart loses it.
+`POST /api/v1/sagas/book-seats` and `GET /api/v1/sagas/{id}` follow `07-api/contracts/openapi/workflow-service.yaml` in `csp-docs`. The state of the sagas lives in schema `workflow` of PostgreSQL (ADR-065, amended). `db/` holds its Flyway migrations (`migrations/`) and their reversions (`rollbacks/`, run by an operator from the highest version down). Apply them before the service starts with `docker compose -f deploy/compose.yml --profile tooling run --rm workflow-db-migrate`. The service connects with `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME` and `SPRING_DATASOURCE_PASSWORD`; its login must be a member of the role `workflow_writer`, which the migrations create. A saga a restart cut in the middle is not resumed yet: that comes next.
 
 ## Branching
 
