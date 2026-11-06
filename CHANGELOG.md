@@ -14,4 +14,5 @@ and is tagged `v<version>` once it is merged.
 
 ### Added
 
+- Base structure of the repository (Annex E, ADR-064): three Maven modules (`workflow-core`, `workflow-adapters`, `workflow-app`), the liveness endpoint `GET /api/v1/health`, `deploy/Dockerfile` and `deploy/compose.yml`, `.env.example` and the `ci.yml` workflow. The saga is not implemented yet.
 - `CHANGELOG.md`.
