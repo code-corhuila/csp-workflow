@@ -1,0 +1,17 @@
+# This service only. csp-infra includes this file to compose the platform.
+name: csp-workflow
+
+services:
+  workflow:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      PORT: ${PORT:-8086}
+    expose: ["8086"]
+    networks: [platform]
+
+networks:
+  platform:
+    name: platform
+    external: true
