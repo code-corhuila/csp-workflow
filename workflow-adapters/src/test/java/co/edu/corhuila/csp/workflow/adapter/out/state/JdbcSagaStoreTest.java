@@ -67,7 +67,7 @@ class JdbcSagaStoreTest {
     }
 
     private static SagaInstance saga(UUID user, String key) {
-        return SagaInstance.start(UUID.randomUUID(), "book-seats", user, key, INPUT, T0);
+        return SagaInstance.start(UUID.randomUUID(), "book-seats", user, "corr-1", key, INPUT, T0);
     }
 
     @Test
@@ -120,6 +120,37 @@ class JdbcSagaStoreTest {
     }
 
     @Test
+    void theCorrelationIdOfTheRequestIsStoredWithTheSaga() throws SQLException {
+        SagaInstance saga = saga(USER, "key-0000000000001");
+        store.save(saga);
+
+        assertEquals("corr-1", store.findById(saga.id()).orElseThrow().correlationId());
+        try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement();
+             var rows = statement.executeQuery("SELECT correlation_id FROM workflow.saga WHERE id = '" + saga.id() + "'")) {
+            rows.next();
+            assertEquals("corr-1", rows.getString(1));
+        }
+    }
+
+    @Test
+    void aRowWithoutACorrelationIdIsRestoredWithTheIdOfTheSaga() throws SQLException {
+        SagaInstance saga = saga(USER, "key-0000000000001");
+        store.save(saga);
+        try (Connection connection = dataSource.getConnection(); Statement statement = connection.createStatement()) {
+            statement.execute("UPDATE workflow.saga SET correlation_id = NULL WHERE id = '" + saga.id() + "'");
+        }
+
+        assertEquals(saga.id().toString(), store.findById(saga.id()).orElseThrow().correlationId());
+    }
+
+    @Test
+    void anEmptyCorrelationIdIsRefusedByTheDatabase() {
+        SagaInstance saga = SagaInstance.start(UUID.randomUUID(), "book-seats", USER, "", "key-0000000000001", INPUT, T0);
+
+        assertThrows(RuntimeException.class, () -> store.save(saga));
+    }
+
+    @Test
     void aSagaIsFoundByItsUserAndKeyAndOnlyByThem() {
         SagaInstance saga = saga(USER, "key-0000000000001");
         store.save(saga);
@@ -154,10 +185,10 @@ class JdbcSagaStoreTest {
 
     @Test
     void onlyTheSagasStillRunningBeforeTheCutoffAreFoundOldestFirst() {
-        SagaInstance older = SagaInstance.start(UUID.randomUUID(), "book-seats", USER, "key-0000000000001", INPUT, T0);
-        SagaInstance newer = SagaInstance.start(UUID.randomUUID(), "book-seats", USER, "key-0000000000002", INPUT, T0.plusSeconds(10));
-        SagaInstance finished = SagaInstance.start(UUID.randomUUID(), "book-seats", USER, "key-0000000000003", INPUT, T0);
-        SagaInstance afterCutoff = SagaInstance.start(UUID.randomUUID(), "book-seats", USER, "key-0000000000004", INPUT, T0.plusSeconds(600));
+        SagaInstance older = SagaInstance.start(UUID.randomUUID(), "book-seats", USER, "corr-1", "key-0000000000001", INPUT, T0);
+        SagaInstance newer = SagaInstance.start(UUID.randomUUID(), "book-seats", USER, "corr-1", "key-0000000000002", INPUT, T0.plusSeconds(10));
+        SagaInstance finished = SagaInstance.start(UUID.randomUUID(), "book-seats", USER, "corr-1", "key-0000000000003", INPUT, T0);
+        SagaInstance afterCutoff = SagaInstance.start(UUID.randomUUID(), "book-seats", USER, "corr-1", "key-0000000000004", INPUT, T0.plusSeconds(600));
         finished.complete(T0);
         for (SagaInstance saga : List.of(newer, older, finished, afterCutoff)) {
             store.save(saga);

@@ -39,6 +39,8 @@ class RunBookSeatsSagaTest {
     private static final UUID RESERVATION_ID = UUID.fromString("9cfcfeec-c4b6-4d76-a0b4-f0db602d7caa");
     private static final UUID USER_ID = UUID.fromString("11111111-1111-4111-8111-111111111111");
     private static final UUID SHOWTIME_ID = UUID.fromString("22222222-2222-4222-8222-222222222222");
+    private static final String CORRELATION_ID = "corr-of-the-request";
+    private static final String CORRELATION_BEFORE_RESTART = CORRELATION_BEFORE_RESTART;
 
     private FakeBooking booking;
     private FakeStore store;
@@ -54,7 +56,7 @@ class RunBookSeatsSagaTest {
     }
 
     private static BookSeatsCommand command(String key, String... seats) {
-        return new BookSeatsCommand(USER_ID, key, SHOWTIME_ID, List.of(seats));
+        return new BookSeatsCommand(USER_ID, key, CORRELATION_ID, SHOWTIME_ID, List.of(seats));
     }
 
     @Test
@@ -143,7 +145,7 @@ class RunBookSeatsSagaTest {
 
     @Test
     void twoRequestsWithTheSameKeyAtTheSameTimeAnswerAsOneSagaAndTheLoserRunsNothing() {
-        store.racer = SagaInstance.start(UUID.fromString("44444444-4444-4444-8444-444444444444"), "book-seats", USER_ID,
+        store.racer = SagaInstance.start(UUID.fromString("44444444-4444-4444-8444-444444444444"), "book-seats", USER_ID, CORRELATION_BEFORE_RESTART,
                 "key-0000000000001", new SagaInput(SHOWTIME_ID, List.of("A1")), Instant.parse("2026-11-05T09:59:59Z"));
 
         StartResult result = saga.start(command("key-0000000000001", "A1"));
@@ -155,7 +157,7 @@ class RunBookSeatsSagaTest {
 
     @Test
     void theLoserOfTheRaceWithAnotherPayloadIsAConflict() {
-        store.racer = SagaInstance.start(UUID.fromString("44444444-4444-4444-8444-444444444444"), "book-seats", USER_ID,
+        store.racer = SagaInstance.start(UUID.fromString("44444444-4444-4444-8444-444444444444"), "book-seats", USER_ID, CORRELATION_BEFORE_RESTART,
                 "key-0000000000001", new SagaInput(SHOWTIME_ID, List.of("A1")), Instant.parse("2026-11-05T09:59:59Z"));
 
         assertThrows(IdempotencyKeyConflictException.class, () -> saga.start(command("key-0000000000001", "B7")));
@@ -167,7 +169,7 @@ class RunBookSeatsSagaTest {
 
     /** A saga that was running when the process died, saved as the orchestrator leaves it before each call. */
     private SagaInstance interrupted(UUID id, String stoppedAt) {
-        SagaInstance cut = SagaInstance.start(id, "book-seats", USER_ID, "key-" + id, new SagaInput(SHOWTIME_ID, List.of("A1")), EARLY);
+        SagaInstance cut = SagaInstance.start(id, "book-seats", USER_ID, CORRELATION_BEFORE_RESTART, "key-" + id, new SagaInput(SHOWTIME_ID, List.of("A1")), EARLY);
         if (!stoppedAt.equals("inserted")) {
             cut.beginStep("hold-seats", EARLY);
         }
@@ -255,7 +257,7 @@ class RunBookSeatsSagaTest {
 
     @Test
     void onlyTheSagasThatWereRunningBeforeTheProcessStartedAreRecovered() {
-        SagaInstance recent = SagaInstance.start(SAGA_ID, "book-seats", USER_ID, "key-recent-00000001",
+        SagaInstance recent = SagaInstance.start(SAGA_ID, "book-seats", USER_ID, CORRELATION_BEFORE_RESTART, "key-recent-00000001",
                 new SagaInput(SHOWTIME_ID, List.of("A1")), CUTOFF.plusSeconds(1));
         store.save(recent);
         SagaInstance done = interrupted(UUID.fromString("55555555-5555-4555-8555-555555555555"), "held");
@@ -301,34 +303,82 @@ class RunBookSeatsSagaTest {
         assertThrows(UnknownSagaException.class, () -> saga.get(USER_ID, UUID.randomUUID()));
     }
 
+    @Test
+    void everyCallOfAStartCarriesTheCorrelationIdOfTheRequest() {
+        saga.start(command("key-0000000000001", "A1"));
+
+        assertEquals(List.of(CORRELATION_ID, CORRELATION_ID), booking.correlations);
+    }
+
+    @Test
+    void theCompensationOfAStartCarriesTheCorrelationIdOfTheRequest() {
+        booking.failOn = "confirm";
+
+        saga.start(command("key-0000000000001", "A1"));
+
+        assertEquals(List.of("hold", "confirm", "release"), booking.calls);
+        assertEquals(List.of(CORRELATION_ID, CORRELATION_ID, CORRELATION_ID), booking.correlations);
+    }
+
+    @Test
+    void aSagaRecoveredBeforeItsFirstCallKeepsTheCorrelationIdOfTheRequestThatStartedIt() {
+        interrupted(SAGA_ID, "inserted");
+
+        saga.recover(CUTOFF);
+
+        assertEquals(List.of(CORRELATION_BEFORE_RESTART, CORRELATION_BEFORE_RESTART), booking.correlations);
+    }
+
+    @Test
+    void aSagaRecoveredDuringTheConfirmationKeepsTheCorrelationIdOfTheRequestThatStartedIt() {
+        interrupted(SAGA_ID, "confirm");
+
+        saga.recover(CUTOFF);
+
+        assertEquals(List.of("confirm"), booking.calls);
+        assertEquals(List.of(CORRELATION_BEFORE_RESTART), booking.correlations);
+    }
+
+    @Test
+    void aSagaRecoveredDuringItsCompensationKeepsTheCorrelationIdOfTheRequestThatStartedIt() {
+        interrupted(SAGA_ID, "compensation");
+
+        saga.recover(CUTOFF);
+
+        assertEquals(List.of("release"), booking.calls);
+        assertEquals(List.of(CORRELATION_BEFORE_RESTART), booking.correlations);
+    }
+
     private static final class FakeBooking implements BookingParticipant {
         final List<String> calls = new ArrayList<>();
         final Map<String, String> keys = new HashMap<>();
+        final List<String> correlations = new ArrayList<>();
         String failOn;
         boolean failRelease;
         UUID holdUser;
         UUID releasedReservation;
 
         @Override
-        public UUID hold(String key, UUID userId, UUID showtimeId, List<String> seatLabels) {
-            record("hold", key);
+        public UUID hold(String key, String correlationId, UUID userId, UUID showtimeId, List<String> seatLabels) {
+            record("hold", key, correlationId);
             holdUser = userId;
             return RESERVATION_ID;
         }
 
         @Override
-        public void confirm(String key, UUID reservationId) {
-            record("confirm", key);
+        public void confirm(String key, String correlationId, UUID reservationId) {
+            record("confirm", key, correlationId);
         }
 
         @Override
-        public void release(String key, UUID reservationId) {
+        public void release(String key, String correlationId, UUID reservationId) {
             releasedReservation = reservationId;
-            record("release", key);
+            record("release", key, correlationId);
         }
 
-        private void record(String call, String key) {
+        private void record(String call, String key, String correlationId) {
             calls.add(call);
+            correlations.add(correlationId);
             keys.put(call, key);
             if (call.equals(failOn) || (call.equals("release") && failRelease)) {
                 throw new ParticipantFailedException("booking answered 503");
