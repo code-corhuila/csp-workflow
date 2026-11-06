@@ -66,8 +66,12 @@ class WorkflowHttpTest {
     @Autowired
     private TestRestTemplate http;
 
+    /** A new key per test: the context, and its store, are shared by all of them. */
+    private String key;
+
     @BeforeEach
     void reset() {
+        key = "key-" + UUID.randomUUID();
         RECEIVED.clear();
         confirmStatus = 200;
     }
@@ -102,7 +106,7 @@ class WorkflowHttpTest {
 
     @Test
     void happyPathCompletesAndEveryStepCarriesTheServiceCredentialItsKeyAndTheCorrelationId() throws Exception {
-        HttpHeaders headers = headers(user(USER), "key-0000000000001");
+        HttpHeaders headers = headers(user(USER), key);
         headers.add("X-Correlation-Id", "corr-e2e-1");
 
         ResponseEntity<String> response = http.exchange("/sagas/book-seats", HttpMethod.POST,
@@ -130,15 +134,15 @@ class WorkflowHttpTest {
 
     @Test
     void withoutTokenIsA401AndAServiceCredentialIsA403() {
-        assertEquals(401, start(null, "key-0000000000001", BODY).getStatusCode().value());
-        assertEquals(401, start("garbage", "key-0000000000001", BODY).getStatusCode().value());
-        assertEquals(403, start(service(), "key-0000000000001", BODY).getStatusCode().value());
+        assertEquals(401, start(null, key, BODY).getStatusCode().value());
+        assertEquals(401, start("garbage", key, BODY).getStatusCode().value());
+        assertEquals(403, start(service(), key, BODY).getStatusCode().value());
         assertEquals(0, RECEIVED.size());
     }
 
     @Test
     void aBadRequestIsA400WithOneDetailPerFieldAndRunsNothing() throws Exception {
-        ResponseEntity<String> response = start(user(USER), "key-0000000000001", "{\"showtimeId\":\"x\",\"seatLabels\":[]}");
+        ResponseEntity<String> response = start(user(USER), key, "{\"showtimeId\":\"x\",\"seatLabels\":[]}");
 
         assertEquals(400, response.getStatusCode().value());
         assertEquals("VALIDATION_ERROR", tree(response).get("error").asText());
@@ -149,10 +153,10 @@ class WorkflowHttpTest {
 
     @Test
     void theSameKeyAndPayloadReplayTheSagaAndRunNoStepAgain() throws Exception {
-        String id = tree(start(user(USER), "key-0000000000001", BODY)).get("id").asText();
+        String id = tree(start(user(USER), key, BODY)).get("id").asText();
         RECEIVED.clear();
 
-        ResponseEntity<String> replay = start(user(USER), "key-0000000000001", BODY);
+        ResponseEntity<String> replay = start(user(USER), key, BODY);
 
         assertEquals(200, replay.getStatusCode().value());
         assertEquals(id, tree(replay).get("id").asText());
@@ -161,9 +165,9 @@ class WorkflowHttpTest {
 
     @Test
     void theSameKeyWithAnotherPayloadIsA409() {
-        start(user(USER), "key-0000000000001", BODY);
+        start(user(USER), key, BODY);
 
-        ResponseEntity<String> conflict = start(user(USER), "key-0000000000001",
+        ResponseEntity<String> conflict = start(user(USER), key,
                 "{\"showtimeId\":\"22222222-2222-4222-8222-222222222222\",\"seatLabels\":[\"B7\"]}");
 
         assertEquals(409, conflict.getStatusCode().value());
@@ -173,7 +177,7 @@ class WorkflowHttpTest {
     void aFailedConfirmationReleasesTheHoldAndTheAnswerNamesOnlyTheFailedStep() throws Exception {
         confirmStatus = 422;
 
-        ResponseEntity<String> response = start(user(USER), "key-0000000000001", BODY);
+        ResponseEntity<String> response = start(user(USER), key, BODY);
 
         assertEquals(201, response.getStatusCode().value());
         JsonNode saga = tree(response);
@@ -188,7 +192,7 @@ class WorkflowHttpTest {
 
     @Test
     void aSagaCanBeReadByItsOwnerAndIsA404ForAnyoneElse() throws Exception {
-        String id = tree(start(user(USER), "key-0000000000001", BODY)).get("id").asText();
+        String id = tree(start(user(USER), key, BODY)).get("id").asText();
 
         ResponseEntity<String> own = http.exchange("/sagas/" + id, HttpMethod.GET,
                 new HttpEntity<>(headers(user(USER), null)), String.class);
