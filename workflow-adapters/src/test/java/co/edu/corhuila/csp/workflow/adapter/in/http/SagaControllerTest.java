@@ -65,7 +65,7 @@ class SagaControllerTest {
     }
 
     private static SagaInstance completed() {
-        SagaInstance saga = SagaInstance.start(SAGA_ID, "book-seats", USER, "key-0000000000001", "fp",
+        SagaInstance saga = SagaInstance.start(SAGA_ID, "book-seats", USER, "key-0000000000001", INPUT,
                 Instant.parse("2026-11-05T10:00:00Z"));
         saga.beginStep("hold-seats", Instant.parse("2026-11-05T10:00:01Z"));
         saga.attachReservation(RESERVATION);
@@ -167,7 +167,7 @@ class SagaControllerTest {
 
     @Test
     void aFailedSagaNeverShowsItsInternalDetail() throws Exception {
-        SagaInstance failed = SagaInstance.start(SAGA_ID, "book-seats", USER, "key-0000000000001", "fp",
+        SagaInstance failed = SagaInstance.start(SAGA_ID, "book-seats", USER, "key-0000000000001", INPUT,
                 Instant.parse("2026-11-05T10:00:00Z"));
         failed.beginStep("hold-seats", Instant.parse("2026-11-05T10:00:01Z"));
         failed.stepFailed("hold-seats", "booking hold answered 503 at secret-host.internal",

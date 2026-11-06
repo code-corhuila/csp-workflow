@@ -18,7 +18,7 @@ public final class SagaInstance {
     private final String sagaName;
     private final UUID userId;
     private final String idempotencyKey;
-    private final String fingerprint;
+    private final SagaInput input;
     private final Instant createdAt;
     private final List<String> completedSteps = new ArrayList<>();
     private final List<String> compensatedSteps = new ArrayList<>();
@@ -27,22 +27,49 @@ public final class SagaInstance {
     private String failedStep;
     private String failureDetail;
     private UUID reservationId;
+    private long version;
     private Instant updatedAt;
 
-    private SagaInstance(UUID id, String sagaName, UUID userId, String idempotencyKey, String fingerprint,
-                         Instant now) {
+    private SagaInstance(UUID id, String sagaName, UUID userId, String idempotencyKey, SagaInput input, Instant now) {
         this.id = Objects.requireNonNull(id);
         this.sagaName = Objects.requireNonNull(sagaName);
         this.userId = Objects.requireNonNull(userId);
         this.idempotencyKey = Objects.requireNonNull(idempotencyKey);
-        this.fingerprint = Objects.requireNonNull(fingerprint);
+        this.input = Objects.requireNonNull(input);
         this.createdAt = Objects.requireNonNull(now);
         this.updatedAt = now;
     }
 
-    public static SagaInstance start(UUID id, String sagaName, UUID userId, String idempotencyKey,
-                                     String fingerprint, Instant now) {
-        return new SagaInstance(id, sagaName, userId, idempotencyKey, fingerprint, now);
+    public static SagaInstance start(UUID id, String sagaName, UUID userId, String idempotencyKey, SagaInput input,
+                                     Instant now) {
+        return new SagaInstance(id, sagaName, userId, idempotencyKey, input, now);
+    }
+
+    /** Gives back a saga a store persisted, in the very state it was saved. */
+    public static SagaInstance restore(SagaSnapshot snapshot) {
+        SagaInstance saga = new SagaInstance(snapshot.id(), snapshot.sagaName(), snapshot.userId(),
+                snapshot.idempotencyKey(), snapshot.input(), snapshot.createdAt());
+        saga.completedSteps.addAll(snapshot.completedSteps());
+        saga.compensatedSteps.addAll(snapshot.compensatedSteps());
+        saga.status = snapshot.status();
+        saga.currentStep = snapshot.currentStep();
+        saga.failedStep = snapshot.failedStep();
+        saga.failureDetail = snapshot.failureDetail();
+        saga.reservationId = snapshot.reservationId();
+        saga.version = snapshot.version();
+        saga.updatedAt = snapshot.updatedAt();
+        return saga;
+    }
+
+    public SagaSnapshot snapshot() {
+        return new SagaSnapshot(id, sagaName, userId, idempotencyKey, input, status, List.copyOf(completedSteps),
+                List.copyOf(compensatedSteps), currentStep, failedStep, failureDetail, reservationId, version,
+                createdAt, updatedAt);
+    }
+
+    /** The store records the version it wrote, so the next write can be guarded by it. */
+    public void persistedAs(long version) {
+        this.version = version;
     }
 
     public void beginStep(String step, Instant now) {
@@ -119,13 +146,14 @@ public final class SagaInstance {
     public String sagaName() { return sagaName; }
     public UUID userId() { return userId; }
     public String idempotencyKey() { return idempotencyKey; }
-    public String fingerprint() { return fingerprint; }
+    public SagaInput input() { return input; }
     public SagaStatus status() { return status; }
     public List<String> completedSteps() { return List.copyOf(completedSteps); }
     public String currentStep() { return currentStep; }
     public String failedStep() { return failedStep; }
     public String failureDetail() { return failureDetail; }
     public UUID reservationId() { return reservationId; }
+    public long version() { return version; }
     public Instant createdAt() { return createdAt; }
     public Instant updatedAt() { return updatedAt; }
 }
