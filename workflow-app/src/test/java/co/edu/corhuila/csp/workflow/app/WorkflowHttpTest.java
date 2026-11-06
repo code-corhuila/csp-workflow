@@ -59,6 +59,9 @@ class WorkflowHttpTest {
                 .encodeToString(KEYS.getPublic().getEncoded()) + "\n-----END PUBLIC KEY-----");
         registry.add("SERVICE_TOKEN", () -> SERVICE_TOKEN);
         registry.add("BOOKING_API_URL", () -> "http://127.0.0.1:" + BOOKING.getAddress().getPort() + "/api/v1/booking");
+        // These tests run without a database: the sagas live in memory and the DataSource is not configured.
+        registry.add("workflow.state.store", () -> "memory");
+        registry.add("spring.autoconfigure.exclude", () -> "org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration");
         registry.add("HTTP_ATTEMPTS", () -> "2");
         registry.add("HTTP_BACKOFF_MS", () -> "1");
     }

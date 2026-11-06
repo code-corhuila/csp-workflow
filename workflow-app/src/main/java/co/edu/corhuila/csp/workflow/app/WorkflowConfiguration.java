@@ -6,6 +6,7 @@ import co.edu.corhuila.csp.workflow.adapter.in.http.Rs256Verifier;
 import co.edu.corhuila.csp.workflow.adapter.out.participants.HttpBookingParticipant;
 import co.edu.corhuila.csp.workflow.adapter.out.participants.ServiceToken;
 import co.edu.corhuila.csp.workflow.adapter.out.state.InMemorySagaStore;
+import co.edu.corhuila.csp.workflow.adapter.out.state.JdbcSagaStore;
 import co.edu.corhuila.csp.workflow.application.port.out.BookingParticipant;
 import co.edu.corhuila.csp.workflow.application.port.out.IdGenerator;
 import co.edu.corhuila.csp.workflow.application.port.out.SagaStore;
@@ -17,7 +18,9 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.UUID;
+import javax.sql.DataSource;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -37,8 +40,17 @@ class WorkflowConfiguration {
         return UUID::randomUUID;
     }
 
+    /** The state of the sagas lives in PostgreSQL (ADR-065); the service does not start without its database. */
     @Bean
-    SagaStore sagaStore() {
+    @ConditionalOnProperty(name = "workflow.state.store", havingValue = "postgres", matchIfMissing = true)
+    SagaStore postgresSagaStore(DataSource dataSource) {
+        return new JdbcSagaStore(dataSource);
+    }
+
+    /** Only for the tests of the service that run without a database: a restart loses every saga. */
+    @Bean
+    @ConditionalOnProperty(name = "workflow.state.store", havingValue = "memory")
+    SagaStore memorySagaStore() {
         return new InMemorySagaStore();
     }
 
