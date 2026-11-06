@@ -16,7 +16,7 @@ class InMemorySagaStoreTest {
     private static final SagaInput INPUT = new SagaInput(UUID.fromString("22222222-2222-4222-8222-222222222222"), List.of("A1", "A2"));
 
     private static SagaInstance saga(UUID user, String key) {
-        return SagaInstance.start(UUID.randomUUID(), "book-seats", user, key, INPUT, Instant.parse("2026-11-05T10:00:00Z"));
+        return SagaInstance.start(UUID.randomUUID(), "book-seats", user, "corr-1", key, INPUT, Instant.parse("2026-11-05T10:00:00Z"));
     }
 
     @Test

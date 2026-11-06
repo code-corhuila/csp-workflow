@@ -55,7 +55,7 @@ jobs:
           docker run --rm --network host -v "$PWD/db:/workspace:ro" -e FLYWAY_URL=jdbc:postgresql://localhost:5432/csp \
             -e FLYWAY_USER=postgres -e FLYWAY_PASSWORD=postgres flyway/flyway:11.20 \
             -workingDirectory=/workspace -configFiles=flyway.toml migrate | tee flyway.log
-          grep -q 'Successfully applied 5 migrations' flyway.log
+          grep -q 'Successfully applied 6 migrations' flyway.log
       # The compose file is what csp-infra includes: it must render with the variables of the platform environment, where
       # SERVICE_TOKEN and SPRING_DATASOURCE_USERNAME belong to other services, and refuse to without the token of the workflow.
       - name: The compose file renders with the variables of the platform
