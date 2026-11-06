@@ -16,7 +16,26 @@ class SagaInstanceTest {
     private static final SagaInput INPUT = new SagaInput(UUID.fromString("22222222-2222-4222-8222-222222222222"), List.of("A1", "A2"));
 
     private static SagaInstance running() {
-        return SagaInstance.start(UUID.randomUUID(), "book-seats", UUID.randomUUID(), "key-0000000000001", INPUT, T0);
+        return SagaInstance.start(UUID.randomUUID(), "book-seats", UUID.randomUUID(), "corr-1", "key-0000000000001", INPUT, T0);
+    }
+
+    @Test
+    void keepsTheCorrelationIdOfTheRequestThatStartedIt() {
+        SagaInstance saga = running();
+
+        assertEquals("corr-1", saga.correlationId());
+        assertEquals("corr-1", saga.snapshot().correlationId());
+        assertEquals("corr-1", SagaInstance.restore(saga.snapshot()).correlationId());
+    }
+
+    @Test
+    void aSagaStoredWithoutACorrelationIdFallsBackToItsOwnId() {
+        SagaSnapshot s = running().snapshot();
+        SagaSnapshot withoutCorrelation = new SagaSnapshot(s.id(), s.sagaName(), s.userId(), s.idempotencyKey(), null,
+                s.input(), s.status(), s.completedSteps(), s.compensatedSteps(), s.currentStep(), s.failedStep(),
+                s.failureDetail(), s.reservationId(), s.version(), s.createdAt(), s.updatedAt());
+
+        assertEquals(s.id().toString(), SagaInstance.restore(withoutCorrelation).correlationId());
     }
 
     @Test

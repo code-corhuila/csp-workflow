@@ -27,6 +27,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.test.web.servlet.MockMvc;
+import org.slf4j.MDC;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 /** The contract of `workflow-service.yaml` 1.0.0 (ADR-066): codes, headers and the fields of the answer. */
@@ -65,7 +66,7 @@ class SagaControllerTest {
     }
 
     private static SagaInstance completed() {
-        SagaInstance saga = SagaInstance.start(SAGA_ID, "book-seats", USER, "key-0000000000001", INPUT,
+        SagaInstance saga = SagaInstance.start(SAGA_ID, "book-seats", USER, "corr-1", "key-0000000000001", INPUT,
                 Instant.parse("2026-11-05T10:00:00Z"));
         saga.beginStep("hold-seats", Instant.parse("2026-11-05T10:00:01Z"));
         saga.attachReservation(RESERVATION);
@@ -114,6 +115,29 @@ class SagaControllerTest {
         assertEquals(USER, started.get(0).userId());
         assertEquals("key-0000000000001", started.get(0).idempotencyKey());
         assertEquals(List.of("A1", "A2"), started.get(0).seatLabels());
+    }
+
+    @Test
+    void theCommandCarriesTheCorrelationIdOfTheRequest() throws Exception {
+        MDC.put("correlationId", "corr-of-the-request");
+        try {
+            mvc.perform(post("/sagas/book-seats").with(SagaControllerTest::authenticated)
+                    .header("Idempotency-Key", "key-0000000000001")
+                    .contentType(MediaType.APPLICATION_JSON).content(BODY)).andExpect(status().isCreated());
+        } finally {
+            MDC.clear();
+        }
+
+        assertEquals("corr-of-the-request", started.get(0).correlationId());
+    }
+
+    @Test
+    void aRequestWithoutACorrelationIdInTheContextStillGivesTheSagaOne() throws Exception {
+        mvc.perform(post("/sagas/book-seats").with(SagaControllerTest::authenticated)
+                .header("Idempotency-Key", "key-0000000000001")
+                .contentType(MediaType.APPLICATION_JSON).content(BODY)).andExpect(status().isCreated());
+
+        assertEquals(false, started.get(0).correlationId().isBlank());
     }
 
     @Test
@@ -167,7 +191,7 @@ class SagaControllerTest {
 
     @Test
     void aFailedSagaNeverShowsItsInternalDetail() throws Exception {
-        SagaInstance failed = SagaInstance.start(SAGA_ID, "book-seats", USER, "key-0000000000001", INPUT,
+        SagaInstance failed = SagaInstance.start(SAGA_ID, "book-seats", USER, "corr-1", "key-0000000000001", INPUT,
                 Instant.parse("2026-11-05T10:00:00Z"));
         failed.beginStep("hold-seats", Instant.parse("2026-11-05T10:00:01Z"));
         failed.stepFailed("hold-seats", "booking hold answered 503 at secret-host.internal",

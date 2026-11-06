@@ -34,7 +34,7 @@ public final class JdbcSagaStore implements SagaStore {
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final String COLUMNS = "id, saga_name, status, user_id, idempotency_key, input, completed_steps, "
-            + "compensated_steps, current_step, failed_step, failure_detail, reservation_id, version, created_at, updated_at";
+            + "compensated_steps, current_step, failed_step, failure_detail, reservation_id, correlation_id, version, created_at, updated_at";
 
     private final JdbcTemplate jdbc;
 
@@ -56,10 +56,10 @@ public final class JdbcSagaStore implements SagaStore {
 
     private void insert(SagaSnapshot s) {
         try {
-            jdbc.update("INSERT INTO workflow.saga (" + COLUMNS + ") VALUES (?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+            jdbc.update("INSERT INTO workflow.saga (" + COLUMNS + ") VALUES (?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
                     s.id(), s.sagaName(), s.status().name(), s.userId(), s.idempotencyKey(), write(s.input()),
                     steps(s.completedSteps()), steps(s.compensatedSteps()), s.currentStep(), s.failedStep(),
-                    s.failureDetail(), s.reservationId(), at(s.createdAt()), at(s.updatedAt()));
+                    s.failureDetail(), s.reservationId(), s.correlationId(), at(s.createdAt()), at(s.updatedAt()));
         } catch (DuplicateKeyException e) {
             throw new SagaAlreadyStartedException();
         }
@@ -97,7 +97,7 @@ public final class JdbcSagaStore implements SagaStore {
 
     private static SagaInstance restore(ResultSet row, int ignored) throws SQLException {
         return SagaInstance.restore(new SagaSnapshot(row.getObject("id", UUID.class), row.getString("saga_name"),
-                row.getObject("user_id", UUID.class), row.getString("idempotency_key"), read(row.getString("input")),
+                row.getObject("user_id", UUID.class), row.getString("idempotency_key"), row.getString("correlation_id"), read(row.getString("input")),
                 SagaStatus.valueOf(row.getString("status")), list(row.getArray("completed_steps")),
                 list(row.getArray("compensated_steps")), row.getString("current_step"), row.getString("failed_step"),
                 row.getString("failure_detail"), row.getObject("reservation_id", UUID.class), row.getLong("version"),
