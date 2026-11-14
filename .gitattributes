@@ -1,0 +1,2 @@
+# The shell scripts run in Linux containers and runners: they keep LF whatever the checkout setting.
+*.sh text eol=lf

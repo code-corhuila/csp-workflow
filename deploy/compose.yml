@@ -1,0 +1,49 @@
+# This service only. csp-infra includes this file to compose the platform.
+# The variables are the ones of the platform environment: every one that belongs to this domain is named after it
+# (WORKFLOW_*), because the environment is shared with the other services and a name like SERVICE_TOKEN or
+# SPRING_DATASOURCE_USERNAME already belongs to csp-worker and csp-booking-api there.
+name: csp-workflow
+
+services:
+  workflow:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      PORT: ${PORT:-8086}
+      BOOKING_API_URL: ${BOOKING_API_URL:-http://booking-api:8083/api/v1/booking}
+      # The state of the sagas (ADR-065): its own login, a member of workflow_writer, never the administrator.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${PG_DATABASE:?set PG_DATABASE}
+      SPRING_DATASOURCE_USERNAME: ${WORKFLOW_APP_USER:-workflow_app}
+      SPRING_DATASOURCE_PASSWORD: ${WORKFLOW_APP_PASSWORD:?set WORKFLOW_APP_PASSWORD}
+      # Public key of the identity service, one line with \n escapes.
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:?run csp-infra-postgres/scripts/dev-keys.sh}
+      # Issued by the identity service for the subject csp-workflow (ADR-052, ADR-056); never versioned.
+      # csp-infra-postgres/scripts/dev-keys.sh writes a development one into the environment file.
+      SERVICE_TOKEN: ${WORKFLOW_SERVICE_TOKEN:?run csp-infra-postgres/scripts/dev-keys.sh}
+      HTTP_ATTEMPTS: ${HTTP_ATTEMPTS:-3}
+      HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-5}
+      HTTP_BACKOFF_MS: ${HTTP_BACKOFF_MS:-200}
+    expose: ["8086"]
+    networks: [platform]
+
+  # Creates schema workflow, where the service keeps the state of the sagas (ADR-065). No -db repository owns that
+  # schema, so its migrations live in db/. It runs as the migration executor of the domain, never as the service,
+  # and before the service starts: docker compose --profile tooling run --rm workflow-db-migrate
+  workflow-db-migrate:
+    image: flyway/flyway:11.20
+    profiles: [tooling]
+    volumes:
+      - ../db:/workspace:ro
+    environment:
+      FLYWAY_URL: jdbc:postgresql://postgres:5432/${PG_DATABASE:?set PG_DATABASE}
+      FLYWAY_USER: ${WORKFLOW_DB_USER:?set WORKFLOW_DB_USER}
+      FLYWAY_PASSWORD: ${WORKFLOW_DB_PASSWORD:?set WORKFLOW_DB_PASSWORD}
+    entrypoint: ["flyway", "-workingDirectory=/workspace", "-configFiles=flyway.toml"]
+    command: ["migrate"]
+    networks: [platform]
+
+networks:
+  platform:
+    name: platform
+    external: true

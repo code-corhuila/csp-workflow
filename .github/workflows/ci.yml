@@ -1,0 +1,89 @@
+name: ci
+
+# Every pull request builds the repository and runs its tests on a clean machine (Annex I).
+
+on:
+  pull_request:
+    branches: [develop, qa, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The tests of the saga store run against a real PostgreSQL (Annex C): TEST_DATABASE_URL turns them on.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: csp
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d csp"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: jdbc:postgresql://localhost:5432/csp?user=postgres&password=postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - run: mvn -B verify
+      # The jar of workflow-app must start on its own: without the repackaging it has no main class and
+      # the container cannot run, and nothing else would fail.
+      - name: The jar is executable
+        run: |
+          unzip -p workflow-app/target/workflow-app-0.1.0.jar META-INF/MANIFEST.MF | grep -q '^Main-Class: org.springframework.boot.loader'
+      # The migrations are applied by the tooling image of the compose file, from an empty schema, as an operator does.
+      - name: The migrations apply with the tooling image
+        run: |
+          PGPASSWORD=postgres psql -h localhost -U postgres -d csp -c 'DROP SCHEMA IF EXISTS workflow CASCADE'
+          docker run --rm --network host -v "$PWD/db:/workspace:ro" -e FLYWAY_URL=jdbc:postgresql://localhost:5432/csp \
+            -e FLYWAY_USER=postgres -e FLYWAY_PASSWORD=postgres flyway/flyway:11.20 \
+            -workingDirectory=/workspace -configFiles=flyway.toml migrate | tee flyway.log
+          grep -q 'Successfully applied 6 migrations' flyway.log
+      # The compose file is what csp-infra includes: it must render with the variables of the platform environment, where
+      # SERVICE_TOKEN and SPRING_DATASOURCE_USERNAME belong to other services, and refuse to without the token of the workflow.
+      - name: The compose file renders with the variables of the platform
+        run: |
+          export PG_DATABASE=csp WORKFLOW_APP_PASSWORD=x JWT_PUBLIC_KEY=k WORKFLOW_SERVICE_TOKEN=t             WORKFLOW_DB_USER=workflow_migrator WORKFLOW_DB_PASSWORD=w
+          docker compose -f deploy/compose.yml --profile tooling config -q
+          if env -u WORKFLOW_SERVICE_TOKEN docker compose -f deploy/compose.yml config -q 2> compose.log; then
+            echo "the compose file rendered without the token of the workflow"; exit 1
+          fi
+          grep -q 'WORKFLOW_SERVICE_TOKEN' compose.log
+      # The image is what csp-infra composes: build it, check that it refuses to start without its key and token,
+      # then start it with a throwaway key pair and ask for its liveness.
+      - name: The image builds and answers its health check
+        run: |
+          docker build -f deploy/Dockerfile -t csp-workflow:ci .
+          if docker run --rm --network host -e SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/csp \
+            -e SPRING_DATASOURCE_USERNAME=postgres -e SPRING_DATASOURCE_PASSWORD=postgres csp-workflow:ci > workflow.log 2>&1; then
+            echo "the service started without a key and a token"; exit 1
+          fi
+          grep -q 'JWT_PUBLIC_KEY or JWT_PUBLIC_KEY_FILE is required' workflow.log || { cat workflow.log; exit 1; }
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out ci-private.pem
+          openssl pkey -in ci-private.pem -pubout -out ci-public.pem
+          docker run -d --name workflow-ci --network host -e SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/csp \
+            -e SPRING_DATASOURCE_USERNAME=postgres -e SPRING_DATASOURCE_PASSWORD=postgres \
+            -e JWT_PUBLIC_KEY="$(cat ci-public.pem)" -e SERVICE_TOKEN=ci-token csp-workflow:ci
+          for i in $(seq 1 30); do
+            curl -fs http://localhost:8086/api/v1/health && exit 0
+            sleep 2
+          done
+          docker logs workflow-ci
+          exit 1
